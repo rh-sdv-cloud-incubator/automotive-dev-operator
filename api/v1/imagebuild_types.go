@@ -29,43 +29,62 @@ type ImageBuildSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
+	// Distro specifies the distribution to build for (e.g., "cs9")
+	Distro string `json:"distro,omitempty"`
+
+	// Target specifies the build target (e.g., "qemu")
+	Target string `json:"target,omitempty"`
+
+	// Architecture specifies the target architecture
+	Architecture string `json:"architecture,omitempty"`
+
+	// ExportFormat specifies the output format (image, qcow2)
+	ExportFormat string `json:"exportFormat,omitempty"`
+
+	// Mode specifies the build mode (package, image)
+	Mode string `json:"mode,omitempty"`
+
 	// StorageClass is the name of the storage class to use for the build PVC
 	StorageClass string `json:"storageClass,omitempty"`
 
-	// OSBuildImage is the name of the image to use for the OS build (default: quay.io/automotive/automotive-osbuild:latest)
-	// +kubebuilder:default="quay.io/centos-sig-automotive/automotive-osbuild:latest"
-	OSBuildImage string `json:"osBuildImage,omitempty"`
+	// AutomativeOSBuildImage specifies the image to use for building
+	AutomativeOSBuildImage string `json:"automativeOSBuildImage,omitempty"`
 
-	// Publishers contains configurations for different types of publishers
-	// of where to publish the image
-	// +optional
-	Publishers []PublisherSpec `json:"publishers,omitempty"`
+	// MppConfigMap specifies the name of the ConfigMap containing the MPP configuration
+	MppConfigMap string `json:"mppConfigMap,omitempty"`
+
+	// Publishers defines where to publish the built artifacts
+	Publishers *Publishers `json:"publishers,omitempty"`
 }
 
-// PublisherSpec defines the configuration for a publisher
-type PublisherSpec struct {
-	// Type specifies the type of publisher (registry, s3, azure)
-	// +kubebuilder:validation:Enum=registry;s3;azure
-	Type string `json:"type"`
-
-	// Registry configuration for container registry type
-	// +optional
-	Registry *RegistryConfig `json:"registry,omitempty"`
+// Publishers defines the configuration for artifact publishing
+type Publishers struct {
+	// Registry configuration for publishing to an OCI registry
+	Registry *RegistryPublisher `json:"registry,omitempty"`
 }
 
-// RegistryConfig defines the configuration for publishing to a container registry
-type RegistryConfig struct {
-	// Secret is the name of the secret containing registry authentication
+// RegistryPublisher defines the configuration for publishing to an OCI registry
+type RegistryPublisher struct {
+	// RepositoryURL is the URL of the OCI registry repository
+	RepositoryURL string `json:"repositoryUrl"`
+
+	// Secret is the name of the secret containing registry credentials
 	Secret string `json:"secret"`
-
-	// RepositoryURL is the target repository URL where images will be published
-	RepositoryURL string `json:"repository_url"`
 }
 
 // ImageBuildStatus defines the observed state of ImageBuild
 type ImageBuildStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Phase represents the current phase of the build (Building, Completed, Failed)
+	Phase string `json:"phase,omitempty"`
+
+	// StartTime is when the build started
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// CompletionTime is when the build finished
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+
+	// Message provides more detail about the current phase
+	Message string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

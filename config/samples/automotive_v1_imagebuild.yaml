@@ -5,5 +5,19 @@ metadata:
     app.kubernetes.io/name: automotive-dev-operator
     app.kubernetes.io/managed-by: kustomize
   name: imagebuild-sample
+  annotations:
+    description: >
+      Example ImageBuild CR. The architecture can be set to any supported value like
+      "aarch64", "x86_64", etc. See your build platform's documentation for supported values.
 spec:
-  # TODO(user): Add fields here
+  architecture: "x86_64"  # Changed from hardcoded aarch64 to a different example value
+  distro: "cs9"
+  target: "qemu"
+  mode: "image"
+  exportFormat: "qcow2"
+  storageClass: "standard"
+  automativeOSBuildImage: "quay.io/redhat/automotive-osbuild:latest"
+  publishers:
+    registry:
+      repositoryUrl: "quay.io/myorg/automotive-images"
+      secret: "registry-credentials"

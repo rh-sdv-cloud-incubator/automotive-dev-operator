@@ -39,52 +39,72 @@ spec:
           spec:
             description: ImageBuildSpec defines the desired state of ImageBuild
             properties:
-              osBuildImage:
-                default: quay.io/centos-sig-automotive/automotive-osbuild:latest
-                description: 'OSBuildImage is the name of the image to use for the
-                  OS build (default: quay.io/automotive/automotive-osbuild:latest)'
+              architecture:
+                description: Architecture specifies the target architecture
+                type: string
+              automativeOSBuildImage:
+                description: AutomativeOSBuildImage specifies the image to use for
+                  building
+                type: string
+              distro:
+                description: Distro specifies the distribution to build for (e.g.,
+                  "cs9")
+                type: string
+              exportFormat:
+                description: ExportFormat specifies the output format (image, qcow2)
+                type: string
+              mode:
+                description: Mode specifies the build mode (package, image)
+                type: string
+              mppConfigMap:
+                description: MppConfigMap specifies the name of the ConfigMap containing
+                  the MPP configuration
                 type: string
               publishers:
-                description: |-
-                  Publishers contains configurations for different types of publishers
-                  of where to publish the image
-                items:
-                  description: PublisherSpec defines the configuration for a publisher
-                  properties:
-                    registry:
-                      description: Registry configuration for container registry type
-                      properties:
-                        repository_url:
-                          description: RepositoryURL is the target repository URL
-                            where images will be published
-                          type: string
-                        secret:
-                          description: Secret is the name of the secret containing
-                            registry authentication
-                          type: string
-                      required:
-                      - repository_url
-                      - secret
-                      type: object
-                    type:
-                      description: Type specifies the type of publisher (registry,
-                        s3, azure)
-                      enum:
-                      - registry
-                      - s3
-                      - azure
-                      type: string
-                  required:
-                  - type
-                  type: object
-                type: array
+                description: Publishers defines where to publish the built artifacts
+                properties:
+                  registry:
+                    description: Registry configuration for publishing to an OCI registry
+                    properties:
+                      repositoryUrl:
+                        description: RepositoryURL is the URL of the OCI registry
+                          repository
+                        type: string
+                      secret:
+                        description: Secret is the name of the secret containing registry
+                          credentials
+                        type: string
+                    required:
+                    - repositoryUrl
+                    - secret
+                    type: object
+                type: object
               storageClass:
                 description: StorageClass is the name of the storage class to use
                   for the build PVC
                 type: string
+              target:
+                description: Target specifies the build target (e.g., "qemu")
+                type: string
             type: object
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
+            properties:
+              completionTime:
+                description: CompletionTime is when the build finished
+                format: date-time
+                type: string
+              message:
+                description: Message provides more detail about the current phase
+                type: string
+              phase:
+                description: Phase represents the current phase of the build (Building,
+                  Completed, Failed)
+                type: string
+              startTime:
+                description: StartTime is when the build started
+                format: date-time
+                type: string
             type: object
         type: object
     served: true

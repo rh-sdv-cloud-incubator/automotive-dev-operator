@@ -35,6 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	securityv1 "github.com/openshift/api/security/v1"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -49,6 +51,8 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(automotivev1.AddToScheme(scheme))
+	utilruntime.Must(securityv1.AddToScheme(scheme))
+	utilruntime.Must(tektonv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

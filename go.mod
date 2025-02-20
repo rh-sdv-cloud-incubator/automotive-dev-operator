@@ -1,8 +1,6 @@
 module gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator
 
-go 1.23.0
-
-toolchain go1.23.6
+go 1.23
 
 require (
 	github.com/google/cel-go v0.23.1 // indirect; This version is compatible with apiserver v0.32.1
