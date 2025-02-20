@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- automotive_v1_imagebuild.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
