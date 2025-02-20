@@ -1,0 +1,93 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+  name: imagebuilds.automotive.sdv.cloud.redhat.com
+spec:
+  group: automotive.sdv.cloud.redhat.com
+  names:
+    kind: ImageBuild
+    listKind: ImageBuildList
+    plural: imagebuilds
+    singular: imagebuild
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: ImageBuild is the Schema for the imagebuilds API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ImageBuildSpec defines the desired state of ImageBuild
+            properties:
+              osBuildImage:
+                default: quay.io/centos-sig-automotive/automotive-osbuild:latest
+                description: 'OSBuildImage is the name of the image to use for the
+                  OS build (default: quay.io/automotive/automotive-osbuild:latest)'
+                type: string
+              publishers:
+                description: |-
+                  Publishers contains configurations for different types of publishers
+                  of where to publish the image
+                items:
+                  description: PublisherSpec defines the configuration for a publisher
+                  properties:
+                    registry:
+                      description: Registry configuration for container registry type
+                      properties:
+                        repository_url:
+                          description: RepositoryURL is the target repository URL
+                            where images will be published
+                          type: string
+                        secret:
+                          description: Secret is the name of the secret containing
+                            registry authentication
+                          type: string
+                      required:
+                      - repository_url
+                      - secret
+                      type: object
+                    type:
+                      description: Type specifies the type of publisher (registry,
+                        s3, azure)
+                      enum:
+                      - registry
+                      - s3
+                      - azure
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+              storageClass:
+                description: StorageClass is the name of the storage class to use
+                  for the build PVC
+                type: string
+            type: object
+          status:
+            description: ImageBuildStatus defines the observed state of ImageBuild
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

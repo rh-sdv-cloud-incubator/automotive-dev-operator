@@ -24,12 +24,42 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ImageBuildSpec defines the desired state of ImageBuild
+// +kubebuilder:printcolumn:name="StorageClass",type=string,JSONPath=`.spec.storageClass`
 type ImageBuildSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of ImageBuild. Edit imagebuild_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// StorageClass is the name of the storage class to use for the build PVC
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// OSBuildImage is the name of the image to use for the OS build (default: quay.io/automotive/automotive-osbuild:latest)
+	// +kubebuilder:default="quay.io/centos-sig-automotive/automotive-osbuild:latest"
+	OSBuildImage string `json:"osBuildImage,omitempty"`
+
+	// Publishers contains configurations for different types of publishers
+	// of where to publish the image
+	// +optional
+	Publishers []PublisherSpec `json:"publishers,omitempty"`
+}
+
+// PublisherSpec defines the configuration for a publisher
+type PublisherSpec struct {
+	// Type specifies the type of publisher (registry, s3, azure)
+	// +kubebuilder:validation:Enum=registry;s3;azure
+	Type string `json:"type"`
+
+	// Registry configuration for container registry type
+	// +optional
+	Registry *RegistryConfig `json:"registry,omitempty"`
+}
+
+// RegistryConfig defines the configuration for publishing to a container registry
+type RegistryConfig struct {
+	// Secret is the name of the secret containing registry authentication
+	Secret string `json:"secret"`
+
+	// RepositoryURL is the target repository URL where images will be published
+	RepositoryURL string `json:"repository_url"`
 }
 
 // ImageBuildStatus defines the observed state of ImageBuild
