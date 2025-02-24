@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	securityv1 "github.com/openshift/api/security/v1"
@@ -58,7 +57,6 @@ type ImageBuildReconciler struct {
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns,verbs=get;list;watch;create;update;patch;delete
-
 func (r *ImageBuildReconciler) ensureNamespace(ctx context.Context, namespaceName string) error {
 	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -129,17 +127,6 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Ensure target namespace exists
 	if err := r.ensureNamespace(ctx, namespace); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Verify ConfigMap exists
-	configMap := &corev1.ConfigMap{}
-	if err := r.Get(ctx, client.ObjectKey{Name: imageBuild.Spec.MppConfigMap, Namespace: namespace}, configMap); err != nil {
-		if errors.IsNotFound(err) {
-			log.Error(err, "ConfigMap not found", "name", imageBuild.Spec.MppConfigMap)
-			// Requeue to try again later
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to get ConfigMap: %w", err)
 	}
 
 	// Create pipeline ServiceAccount

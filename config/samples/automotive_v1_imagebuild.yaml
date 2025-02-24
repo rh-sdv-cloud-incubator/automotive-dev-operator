@@ -17,6 +17,7 @@ spec:
   exportFormat: "qcow2"
   storageClass: "standard"
   automativeOSBuildImage: "quay.io/redhat/automotive-osbuild:latest"
+  mppConfigMap: mpp
   publishers:
     registry:
       repositoryUrl: "quay.io/myorg/automotive-images"
