@@ -55,6 +55,9 @@ type ImageBuildSpec struct {
 
 	// Publishers defines where to publish the built artifacts
 	Publishers *Publishers `json:"publishers,omitempty"`
+
+	// RuntimeClassName specifies the runtime class to use for the build pod
+	RuntimeClassName string `json:"runtimeClassName,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing

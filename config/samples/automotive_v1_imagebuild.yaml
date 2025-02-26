@@ -18,7 +18,7 @@ spec:
   storageClass: "standard"
   automativeOSBuildImage: "quay.io/redhat/automotive-osbuild:latest"
   mppConfigMap: mpp
-  publishers:
+publishers:
     registry:
       repositoryUrl: "quay.io/myorg/automotive-images"
       secret: "registry-credentials"

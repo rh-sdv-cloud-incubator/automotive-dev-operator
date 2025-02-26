@@ -20,4 +20,13 @@ resources:
   kind: ImageBuild
   path: gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: sdv.cloud.redhat.com
+  group: automotive
+  kind: AutomotiveDev
+  path: gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1
+  version: v1
 version: "3"

@@ -37,8 +37,10 @@ import (
 
 	securityv1 "github.com/openshift/api/security/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
-	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller"
+	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
+	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -123,7 +125,6 @@ func main() {
 		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
-
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -131,32 +132,31 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "930f6355.sdv.cloud.redhat.com",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
-	if err = (&controller.ImageBuildReconciler{
+	if err = (&automotivedev.AutomotiveDevReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("AutomotiveDev"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AutomotiveDev")
+		os.Exit(1)
+	}
+
+	if err = (&imagebuild.ImageBuildReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("ImageBuild"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ImageBuild")
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
 
+	// Health checks
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -166,7 +166,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager for controller")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)

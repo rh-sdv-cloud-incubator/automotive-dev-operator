@@ -79,6 +79,10 @@ spec:
                     - secret
                     type: object
                 type: object
+              runtimeClassName:
+                description: RuntimeClassName specifies the runtime class to use for
+                  the build pod
+                type: string
               storageClass:
                 description: StorageClass is the name of the storage class to use
                   for the build PVC

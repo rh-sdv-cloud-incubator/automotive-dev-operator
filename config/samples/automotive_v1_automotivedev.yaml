@@ -1,0 +1,18 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1
+kind: AutomotiveDev
+metadata:
+  labels:
+    app.kubernetes.io/name: automotive-dev-operator
+    app.kubernetes.io/managed-by: kustomize
+    environment: development
+  name: automotivedev-sample
+spec:
+  foo: "example-value"
+  # Add other custom configuration options here as they get implemented
+  # For example, these might be future fields:
+  # resources:
+  #   cpu: "2"
+  #   memory: "4Gi"
+  # components:
+  #   enableNetworking: true
+  #   enableStorage: true

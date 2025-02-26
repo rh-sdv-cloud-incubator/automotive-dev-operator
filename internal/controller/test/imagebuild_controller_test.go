@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package test
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
@@ -40,11 +41,11 @@ var _ = Describe("ImageBuild Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		imagebuild := &automotivev1.ImageBuild{}
+		ib := &automotivev1.ImageBuild{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind ImageBuild")
-			err := k8sClient.Get(ctx, typeNamespacedName, imagebuild)
+			err := k8sClient.Get(ctx, typeNamespacedName, ib)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &automotivev1.ImageBuild{
 					ObjectMeta: metav1.ObjectMeta{
@@ -68,7 +69,7 @@ var _ = Describe("ImageBuild Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &ImageBuildReconciler{
+			controllerReconciler := &imagebuild.ImageBuildReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

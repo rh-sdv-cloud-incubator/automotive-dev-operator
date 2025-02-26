@@ -1,8 +1,10 @@
-package controller
+package tekton
 
 import (
+	"fmt"
 	"time"
 
+	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -10,7 +12,7 @@ import (
 )
 
 // generateTektonPipeline creates the main Pipeline resource
-func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
+func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 	return &tektonv1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
@@ -202,13 +204,13 @@ func generateBuildImagePipelineTask() tektonv1.PipelineTask {
 			{Name: "shared-workspace", Workspace: "shared-workspace"},
 			{Name: "mpp-config-workspace", Workspace: "mpp-config-workspace"},
 		},
-		OnError: tektonv1.PipelineTaskContinue, // Fixed: using the correct type
+		OnError: tektonv1.PipelineTaskContinue,
 		Timeout: &metav1.Duration{Duration: 1 * time.Hour},
 	}
 }
 
-// generateTektonTasks generates all required Tekton Tasks
-func generateTektonTasks(namespace string) []*tektonv1.Task {
+// GenerateTektonTasks generates all required Tekton Tasks
+func GenerateTektonTasks(namespace string) []*tektonv1.Task {
 	return []*tektonv1.Task{
 		generateCreatePVCTask(namespace),
 		generateBuildAutomotiveImageTask(namespace),
@@ -428,7 +430,6 @@ echo $MPP_FILE > /tekton/results/mpp-file-path`,
 					},
 					Script: buildImageScript,
 					VolumeMounts: []corev1.VolumeMount{
-						{Name: "dev", MountPath: "/dev"},
 						{Name: "build", MountPath: "/_build"},
 						{Name: "task-pvc", MountPath: "/output"},
 						{Name: "task-pvc", MountPath: "/run/osbuild"},
@@ -436,14 +437,6 @@ echo $MPP_FILE > /tekton/results/mpp-file-path`,
 				},
 			},
 			Volumes: []corev1.Volume{
-				{
-					Name: "dev",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
-							Path: "/dev",
-						},
-					},
-				},
 				{
 					Name: "build",
 					VolumeSource: corev1.VolumeSource{
@@ -551,4 +544,36 @@ echo "Image pushed successfully to registry"`,
 			},
 		},
 	}
+}
+
+func generatePipelineRun(name, namespace string, params []tektonv1.Param, workspaces []tektonv1.WorkspaceBinding, runtimeClassName *string) *tektonv1.PipelineRun {
+	pipelineRun := &tektonv1.PipelineRun{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: fmt.Sprintf("%s-run-", name),
+			Namespace:    namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": name,
+			},
+		},
+		Spec: tektonv1.PipelineRunSpec{
+			PipelineRef: &tektonv1.PipelineRef{
+				Name: "automotive-build-pipeline",
+			},
+			Params:     params,
+			Workspaces: workspaces,
+		},
+	}
+
+	if runtimeClassName != nil && *runtimeClassName != "" {
+		pipelineRun.Spec.TaskRunSpecs = []tektonv1.PipelineTaskRunSpec{
+			{
+				PipelineTaskName: "build-automotive-image",
+				PodTemplate: &pod.PodTemplate{
+					RuntimeClassName: runtimeClassName,
+				},
+			},
+		}
+	}
+
+	return pipelineRun
 }
