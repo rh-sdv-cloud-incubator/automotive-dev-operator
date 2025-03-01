@@ -435,7 +435,9 @@ func generatePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 							Value: "/tekton/home/.docker",
 						},
 					},
-					Script: `#!/bin/sh
+					Script:
+`
+#!/bin/sh
 set -ex
 
 # Determine file extension based on export format
@@ -455,7 +457,8 @@ oras push --disable-path-validation \
   $(params.repository-url) \
   $exportFile:application/vnd.oci.image.layer.v1.tar
 
-echo "Image pushed successfully to registry"`,
+echo "Image pushed successfully to registry"
+`,
 					WorkingDir: "/workspace/shared",
 					VolumeMounts: []corev1.VolumeMount{
 						{
@@ -566,6 +569,12 @@ echo $MPP_FILE > /tekton/results/mpp-file-path`,
 						SELinuxOptions: &corev1.SELinuxOptions{
 							Type: "unconfined_t",
 						},
+						Capabilities: &corev1.Capabilities{
+							Add: []corev1.Capability{
+								"SYS_ADMIN",
+								"MKNOD",
+							},
+						},
 					},
 					Script: buildImageScript,
 					VolumeMounts: []corev1.VolumeMount{
@@ -580,6 +589,10 @@ echo $MPP_FILE > /tekton/results/mpp-file-path`,
 						{
 							Name:      "run-dir",
 							MountPath: "/run/osbuild",
+						},
+						{
+							Name:      "dev",
+							MountPath: "/dev",
 						},
 					},
 				},
@@ -601,6 +614,14 @@ echo $MPP_FILE > /tekton/results/mpp-file-path`,
 					Name: "run-dir",
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "dev",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/dev",
+						},
 					},
 				},
 			},
