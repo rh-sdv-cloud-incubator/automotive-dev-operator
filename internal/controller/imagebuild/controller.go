@@ -17,6 +17,7 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"k8s.io/utils/ptr"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
@@ -254,7 +255,7 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 					Kind:       imageBuild.Kind,
 					Name:       imageBuild.Name,
 					UID:        imageBuild.UID,
-					Controller: ptr(true),
+					Controller: ptr.To(true),
 				},
 			},
 		},
@@ -345,8 +346,4 @@ func isSuccessful(pipelineRun tektonv1.PipelineRun) bool {
 	}
 
 	return conditions[0].Status == corev1.ConditionTrue
-}
-
-func ptr(b bool) *bool {
-	return &b
 }
