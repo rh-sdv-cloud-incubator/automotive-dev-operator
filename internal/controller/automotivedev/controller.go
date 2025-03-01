@@ -24,7 +24,7 @@ type AutomotiveDevReconciler struct {
 }
 
 const (
-	DefaultNamespace = "automotive-dev"
+	TektonResourcesNamespace = "automotive-dev-operator-system"
 )
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=automotivedevs,verbs=get;list;watch;create;update;patch;delete
@@ -53,15 +53,8 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("AutomotiveDev fetched successfully", "name", av.Name)
 
-	pipeline := tekton.GenerateTektonPipeline("automotive-build-pipeline", av.Namespace)
-	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
-		log.Error(err, "Failed to create/update Pipeline")
-		return ctrl.Result{}, err
-	}
-
-	log.Info("Pipeline created successfully", "name", pipeline.Name)
-
-	tasks := tekton.GenerateTektonTasks(av.Namespace)
+	// Create Tasks in the designated namespace FIRST
+	tasks := tekton.GenerateTektonTasks(TektonResourcesNamespace)
 	for _, task := range tasks {
 		if err := r.createOrUpdateTask(ctx, task); err != nil {
 			log.Error(err, "Failed to create/update Task", "task", task.Name)
@@ -69,6 +62,12 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 
 		log.Info("Task created successfully", "name", task.Name)
+	}
+
+	pipeline := tekton.GenerateTektonPipeline("automotive-build-pipeline", TektonResourcesNamespace)
+	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
+		log.Error(err, "Failed to create/update Pipeline")
+		return ctrl.Result{}, err
 	}
 
 	log.Info("Successfully reconciled ")

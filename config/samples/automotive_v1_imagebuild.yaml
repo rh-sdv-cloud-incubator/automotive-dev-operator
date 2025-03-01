@@ -10,15 +10,15 @@ metadata:
       Example ImageBuild CR. The architecture can be set to any supported value like
       "aarch64", "x86_64", etc. See your build platform's documentation for supported values.
 spec:
-  architecture: "x86_64"  # Changed from hardcoded aarch64 to a different example value
+  architecture: "arm64"
   distro: "cs9"
   target: "qemu"
   mode: "image"
   exportFormat: "qcow2"
-  storageClass: "standard"
-  automativeOSBuildImage: "quay.io/redhat/automotive-osbuild:latest"
+  storageClass: "gp3-csi"
+  automativeOSBuildImage: "quay.io/centos-sig-automotive/automotive-osbuild:latest"
   mppConfigMap: mpp
 publishers:
     registry:
-      repositoryUrl: "quay.io/myorg/automotive-images"
+      repositoryUrl: "quay.io/bzlotnik/automotive-image:latest"
       secret: "registry-credentials"

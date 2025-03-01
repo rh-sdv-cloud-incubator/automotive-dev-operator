@@ -1,17 +1,19 @@
 package tekton
 
 import (
-	"fmt"
 	"time"
 
-	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
 
-// generateTektonPipeline creates the main Pipeline resource
+const (
+	OperatorNamespace = "automotive-dev-operator-system"
+)
+
+// GenerateTektonPipeline creates the main Pipeline resource
 func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 	return &tektonv1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
@@ -87,13 +89,22 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Description: "Automotive OSBuild image to use for building",
 				},
 				{
-					Name: "output-pvc-size",
-					Type: tektonv1.ParamTypeString,
+					Name:        "repository-url",
+					Type:        tektonv1.ParamTypeString,
+					Description: "URL of the artifact registry to push to",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "12Gi",
+						StringVal: "",
 					},
-					Description: "Size of the PVC to create for the build",
+				},
+				{
+					Name:        "secret-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Secret reference for registry credentials",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
 				},
 			},
 			Workspaces: []tektonv1.PipelineWorkspaceDeclaration{
@@ -101,181 +112,175 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 				{Name: "mpp-config-workspace"},
 			},
 			Tasks: []tektonv1.PipelineTask{
-				generateCreatePVCPipelineTask(),
-				generateBuildImagePipelineTask(),
+				{
+					Name: "build-image",
+					TaskRef: &tektonv1.TaskRef{
+						ResolverRef: tektonv1.ResolverRef{
+							Resolver: "cluster",
+							Params: []tektonv1.Param{
+								{
+									Name: "kind",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: "task",
+									},
+								},
+								{
+									Name: "name",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: "build-automotive-image",
+									},
+								},
+								{
+									Name: "namespace",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: namespace,
+									},
+								},
+							},
+						},
+					},
+					Params: []tektonv1.Param{
+						{
+							Name: "target-architecture",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.arch)",
+							},
+						},
+						{
+							Name: "distro",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.distro)",
+							},
+						},
+						{
+							Name: "target",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.target)",
+							},
+						},
+						{
+							Name: "mode",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.mode)",
+							},
+						},
+						{
+							Name: "export-format",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.export-format)",
+							},
+						},
+						{
+							Name: "automotive-osbuild-image",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.automotive-osbuild-image)",
+							},
+						},
+					},
+					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
+						{Name: "shared-workspace", Workspace: "shared-workspace"},
+						{Name: "mpp-config-workspace", Workspace: "mpp-config-workspace"},
+					},
+					Timeout: &metav1.Duration{Duration: 1 * time.Hour},
+				},
+				{
+					Name: "push-registry",
+					TaskRef: &tektonv1.TaskRef{
+						ResolverRef: tektonv1.ResolverRef{
+							Resolver: "cluster",
+							Params: []tektonv1.Param{
+								{
+									Name: "kind",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: "task",
+									},
+								},
+								{
+									Name: "name",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: "push-artifact-registry",
+									},
+								},
+								{
+									Name: "namespace",
+									Value: tektonv1.ParamValue{
+										Type:      tektonv1.ParamTypeString,
+										StringVal: namespace,
+									},
+								},
+							},
+						},
+					},
+					Params: []tektonv1.Param{
+						{
+							Name: "distro",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.distro)",
+							},
+						},
+						{
+							Name: "target",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.target)",
+							},
+						},
+						{
+							Name: "export-format",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.export-format)",
+							},
+						},
+						{
+							Name: "repository-url",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.repository-url)",
+							},
+						},
+						{
+							Name: "secret-ref",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.secret-ref)",
+							},
+						},
+					},
+					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
+						{Name: "shared-workspace", Workspace: "shared-workspace"},
+					},
+					RunAfter: []string{"build-image"},
+				},
 			},
 		},
-	}
-}
-
-func generateCreatePVCPipelineTask() tektonv1.PipelineTask {
-	return tektonv1.PipelineTask{
-		Name: "create-build-pvc",
-		TaskRef: &tektonv1.TaskRef{
-			Name: "create-pvc",
-			Kind: "Task",
-		},
-		Params: []tektonv1.Param{
-			{
-				Name: "pvc-name",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "build-pvc-$(context.pipelineRun.uid)",
-				},
-			},
-			{
-				Name: "pvc-size",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.output-pvc-size)",
-				},
-			},
-			{
-				Name: "storage-class",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.storage-class)",
-				},
-			},
-		},
-	}
-}
-
-func generateBuildImagePipelineTask() tektonv1.PipelineTask {
-	return tektonv1.PipelineTask{
-		Name: "build-image",
-		TaskRef: &tektonv1.TaskRef{
-			Name: "build-automotive-image",
-			Kind: tektonv1.NamespacedTaskKind,
-		},
-		RunAfter: []string{"create-build-pvc"},
-		Params: []tektonv1.Param{
-			{
-				Name: "target-architecture",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.arch)",
-				},
-			},
-			{
-				Name: "distro",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.distro)",
-				},
-			},
-			{
-				Name: "target",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.target)",
-				},
-			},
-			{
-				Name: "mode",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.mode)",
-				},
-			},
-			{
-				Name: "export-format",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.export-format)",
-				},
-			},
-			{
-				Name: "build-pvc-name",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(tasks.create-build-pvc.results.pvc-name)",
-				},
-			},
-			{
-				Name: "automotive-osbuild-image",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: "$(params.automotive-osbuild-image)",
-				},
-			},
-		},
-		Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
-			{Name: "shared-workspace", Workspace: "shared-workspace"},
-			{Name: "mpp-config-workspace", Workspace: "mpp-config-workspace"},
-		},
-		OnError: tektonv1.PipelineTaskContinue,
-		Timeout: &metav1.Duration{Duration: 1 * time.Hour},
 	}
 }
 
 // GenerateTektonTasks generates all required Tekton Tasks
 func GenerateTektonTasks(namespace string) []*tektonv1.Task {
-	return []*tektonv1.Task{
-		generateCreatePVCTask(namespace),
+	tasks := []*tektonv1.Task{
 		generateBuildAutomotiveImageTask(namespace),
 		generatePushArtifactRegistryTask(namespace),
 	}
-}
-
-func generateCreatePVCTask(namespace string) *tektonv1.Task {
-	return &tektonv1.Task{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "tekton.dev/v1",
-			Kind:       "Task",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "create-pvc",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "automotive-dev-operator",
-				"app.kubernetes.io/part-of":    "automotive-dev",
-			},
-		},
-		Spec: tektonv1.TaskSpec{
-			Params: []tektonv1.ParamSpec{
-				{Name: "pvc-name", Type: tektonv1.ParamTypeString},
-				{Name: "pvc-size", Type: tektonv1.ParamTypeString},
-				{
-					Name:    "storage-class",
-					Type:    tektonv1.ParamTypeString,
-					Default: &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
-				},
-			},
-			Results: []tektonv1.TaskResult{
-				{
-					Name:        "pvc-name",
-					Description: "The name of the created pvc",
-				},
-			},
-			Steps: []tektonv1.Step{
-				{
-					Name:  "create-pvc",
-					Image: "bitnami/kubectl:latest",
-					Script: `#!/usr/bin/env bash
-set -e
-cat <<EOF | kubectl create -f -
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: $(params.pvc-name)
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: $(params.storage-class)
-  resources:
-    requests:
-      storage: $(params.pvc-size)
-EOF
-echo -n "$(params.pvc-name)" > $(results.pvc-name.path)`,
-				},
-			},
-		},
-	}
+	return tasks
 }
 
 // Common build image script template
-const buildImageScript = `#!/bin/bash
+const buildImageScript = `
+#!/bin/sh
 set -e
 
 # Environment preparation
@@ -339,12 +344,22 @@ else
   echo "No custom-definitions.env file found"
 fi
 
+arch="$(params.target-architecture)"
+case "$arch" in
+  "arm64")
+    arch="aarch64"
+    ;;
+  "amd64")
+    arch="x86_64"
+    ;;
+esac
+
 build_command="automotive-image-builder --verbose \
   build \
   $CUSTOM_DEFS \
   --distro $(params.distro) \
   --target $(params.target) \
-  --arch=$(params.target-architecture) \
+  --arch=${arch} \
   --build-dir=/output/_build \
   --export $(params.export-format) \
   --osbuild-manifest=/output/image.json \
@@ -358,103 +373,8 @@ $build_command
 pushd /output
 ln -s ./${exportFile} ./disk.img
 echo "Build command completed. Listing output directory:"
-ls -l`
-
-func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
-	return &tektonv1.Task{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "tekton.dev/v1",
-			Kind:       "Task",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "build-automotive-image",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "automotive-dev-operator",
-				"app.kubernetes.io/part-of":    "automotive-dev",
-			},
-		},
-		Spec: tektonv1.TaskSpec{
-			Params: []tektonv1.ParamSpec{
-				{Name: "target-architecture", Type: tektonv1.ParamTypeString},
-				{Name: "distro", Type: tektonv1.ParamTypeString},
-				{Name: "target", Type: tektonv1.ParamTypeString},
-				{Name: "mode", Type: tektonv1.ParamTypeString},
-				{Name: "export-format", Type: tektonv1.ParamTypeString},
-				{Name: "build-pvc-name", Type: tektonv1.ParamTypeString},
-				{Name: "automotive-osbuild-image", Type: tektonv1.ParamTypeString},
-			},
-			Results: []tektonv1.TaskResult{
-				{
-					Name:        "mpp-file-path",
-					Description: "Path to the MPP file used for building",
-				},
-			},
-			Workspaces: []tektonv1.WorkspaceDeclaration{
-				{
-					Name:      "shared-workspace",
-					MountPath: "/workspace/shared",
-				},
-				{
-					Name:      "mpp-config-workspace",
-					MountPath: "/workspace/mpp-config",
-				},
-			},
-			Steps: []tektonv1.Step{
-				{
-					Name:  "find-mpp-file",
-					Image: "busybox",
-					Script: `#!/bin/sh
-set -e
-MPP_FILE=$(find $(workspaces.mpp-config-workspace.path) -name '*.mpp.yml' -type f)
-if [ -z "$MPP_FILE" ]; then
-  echo "No .mpp.yml file found in the ConfigMap"
-  exit 1
-fi
-echo $MPP_FILE > /tekton/results/mpp-file-path`,
-				},
-				{
-					Name:  "build-image",
-					Image: "$(params.automotive-osbuild-image)",
-					Env: []corev1.EnvVar{
-						{
-							Name:  "REGISTRY_AUTH_FILE",
-							Value: "/tekton/home/.docker/config.json",
-						},
-					},
-					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
-						SELinuxOptions: &corev1.SELinuxOptions{
-							Type: "unconfined_t",
-						},
-					},
-					Script: buildImageScript,
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: "build", MountPath: "/_build"},
-						{Name: "task-pvc", MountPath: "/output"},
-						{Name: "task-pvc", MountPath: "/run/osbuild"},
-					},
-				},
-			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "build",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
-				{
-					Name: "task-pvc",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: "$(params.build-pvc-name)",
-						},
-					},
-				},
-			},
-		},
-	}
-}
+ls -l
+`
 
 func generatePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 	return &tektonv1.Task{
@@ -472,12 +392,38 @@ func generatePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 		},
 		Spec: tektonv1.TaskSpec{
 			Params: []tektonv1.ParamSpec{
-				{Name: "build-pvc-name", Type: tektonv1.ParamTypeString},
-				{Name: "distro", Type: tektonv1.ParamTypeString},
-				{Name: "target", Type: tektonv1.ParamTypeString},
-				{Name: "export-format", Type: tektonv1.ParamTypeString},
-				{Name: "repository-url", Type: tektonv1.ParamTypeString},
-				{Name: "secret-ref", Type: tektonv1.ParamTypeString},
+				{
+					Name:        "distro",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Distribution to build",
+				},
+				{
+					Name:        "target",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Build target",
+				},
+				{
+					Name:        "export-format",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Export format for the build",
+				},
+				{
+					Name:        "repository-url",
+					Type:        tektonv1.ParamTypeString,
+					Description: "URL of the artifact registry",
+				},
+				{
+					Name:        "secret-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Name of the secret containing registry credentials",
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "shared-workspace",
+					Description: "Workspace containing the build artifacts",
+					MountPath:   "/workspace/shared",
+				},
 			},
 			Steps: []tektonv1.Step{
 				{
@@ -495,7 +441,7 @@ set -ex
 # Determine file extension based on export format
 if [ "$(params.export-format)" = "image" ]; then
   file_extension=".raw"
-elif [ "$(params.export-format)" = "qcow2"; then
+elif [ "$(params.export-format)" = "qcow2" ]; then
   file_extension=".qcow2"
 else
   file_extension="$(params.export-format)"
@@ -510,12 +456,8 @@ oras push --disable-path-validation \
   $exportFile:application/vnd.oci.image.layer.v1.tar
 
 echo "Image pushed successfully to registry"`,
-					WorkingDir: "/output",
+					WorkingDir: "/workspace/shared",
 					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "task-pvc",
-							MountPath: "/output",
-						},
 						{
 							Name:      "docker-config",
 							MountPath: "/tekton/home/.docker/config.json",
@@ -525,14 +467,6 @@ echo "Image pushed successfully to registry"`,
 				},
 			},
 			Volumes: []corev1.Volume{
-				{
-					Name: "task-pvc",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: "$(params.build-pvc-name)",
-						},
-					},
-				},
 				{
 					Name: "docker-config",
 					VolumeSource: corev1.VolumeSource{
@@ -546,34 +480,130 @@ echo "Image pushed successfully to registry"`,
 	}
 }
 
-func generatePipelineRun(name, namespace string, params []tektonv1.Param, workspaces []tektonv1.WorkspaceBinding, runtimeClassName *string) *tektonv1.PipelineRun {
-	pipelineRun := &tektonv1.PipelineRun{
+func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("%s-run-", name),
-			Namespace:    namespace,
+			Name:      "build-automotive-image",
+			Namespace: namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/instance": name,
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
 			},
 		},
-		Spec: tektonv1.PipelineRunSpec{
-			PipelineRef: &tektonv1.PipelineRef{
-				Name: "automotive-build-pipeline",
-			},
-			Params:     params,
-			Workspaces: workspaces,
-		},
-	}
-
-	if runtimeClassName != nil && *runtimeClassName != "" {
-		pipelineRun.Spec.TaskRunSpecs = []tektonv1.PipelineTaskRunSpec{
-			{
-				PipelineTaskName: "build-automotive-image",
-				PodTemplate: &pod.PodTemplate{
-					RuntimeClassName: runtimeClassName,
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "target-architecture",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Target architecture for the build",
+				},
+				{
+					Name:        "distro",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Distribution to build",
+				},
+				{
+					Name:        "target",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Build target",
+				},
+				{
+					Name:        "mode",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Build mode",
+				},
+				{
+					Name:        "export-format",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Export format for the build",
+				},
+				{
+					Name:        "automotive-osbuild-image",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Automotive OSBuild container image to use",
 				},
 			},
-		}
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "mpp-file-path",
+					Description: "Path to the MPP file used for building",
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "shared-workspace",
+					Description: "Workspace for sharing data between steps",
+					MountPath:   "/workspace/shared",
+				},
+				{
+					Name:        "mpp-config-workspace",
+					Description: "Workspace for MPP configuration",
+					MountPath:   "/workspace/mpp-config",
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:  "find-mpp-file",
+					Image: "quay.io/prometheus/busybox:latest",
+					Script: `#!/bin/sh
+set -e
+MPP_FILE=$(find $(workspaces.mpp-config-workspace.path) -name '*.mpp.yml' -type f)
+if [ -z "$MPP_FILE" ]; then
+  echo "No .mpp.yml file found in the ConfigMap"
+  exit 1
+fi
+echo $MPP_FILE > /tekton/results/mpp-file-path`,
+				},
+				{
+					Name:  "build-image",
+					Image: "$(params.automotive-osbuild-image)",
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: ptr.To(true),
+						SELinuxOptions: &corev1.SELinuxOptions{
+							Type: "unconfined_t",
+						},
+					},
+					Script: buildImageScript,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "build-dir",
+							MountPath: "/_build",
+						},
+						{
+							Name:      "output-dir",
+							MountPath: "/output",
+						},
+						{
+							Name:      "run-dir",
+							MountPath: "/run/osbuild",
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "build-dir",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "output-dir",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "run-dir",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+			},
+		},
 	}
-
-	return pipelineRun
 }
