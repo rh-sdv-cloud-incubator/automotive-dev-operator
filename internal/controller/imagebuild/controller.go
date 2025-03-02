@@ -17,9 +17,9 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"k8s.io/utils/ptr"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -52,6 +52,9 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, req.NamespacedName, imageBuild); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	log.Info("fetched ImageBuild", "name", imageBuild.Name)
+
 
 	// Check if PipelineRun already exists
 	existingPipelineRuns := &tektonv1.PipelineRunList{}
