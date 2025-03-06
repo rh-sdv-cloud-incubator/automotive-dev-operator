@@ -123,7 +123,7 @@ var buildImageScript string
 var pushArtifactScript string
 
 func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
-	return &tektonv1.Pipeline{
+	pipeline := &tektonv1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
 			Kind:       "Pipeline",
@@ -371,10 +371,24 @@ func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 						{Name: "shared-workspace", Workspace: "shared-workspace"},
 					},
 					RunAfter: []string{"build-image"},
+					When: []tektonv1.WhenExpression{
+						{
+							Input:    "$(params.repository-url)",
+							Operator: "notin",
+							Values:   []string{"", "null"},
+						},
+						{
+							Input:    "$(params.secret-ref)",
+							Operator: "notin",
+							Values:   []string{"", "null"},
+						},
+					},
 				},
 			},
 		},
 	}
+
+	return pipeline
 }
 
 func generateTektonTasks(namespace string) []*tektonv1.Task {

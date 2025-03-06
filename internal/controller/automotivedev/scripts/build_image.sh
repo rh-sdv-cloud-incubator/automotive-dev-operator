@@ -1,12 +1,10 @@
 #!/bin/sh
 set -e
 
-# Environment preparation
 osbuildPath="/usr/bin/osbuild"
 storePath="/_build"
 runTmp="/run/osbuild/"
 
-# Create necessary directories
 mkdir -p "$storePath"
 mkdir -p "$runTmp"
 
@@ -30,7 +28,6 @@ mount --bind "$destPath" "$osbuildPath"
 
 cd $(workspaces.shared-workspace.path)
 
-# Determine file extension based on export format
 if [ "$(params.export-format)" = "image" ]; then
   file_extension=".raw"
 elif [ "$(params.export-format)" = "qcow2" ]; then
@@ -39,7 +36,6 @@ else
   file_extension="$(params.export-format)"
 fi
 
-# Create the export file name with the correct extension
 exportFile=$(params.distro)-$(params.target)-$(params.export-format)${file_extension}
 
 mode_param=""
