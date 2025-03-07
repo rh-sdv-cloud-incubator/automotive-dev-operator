@@ -7,7 +7,7 @@ variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
   REGISTRY: quay.io
-  IMAGE_NAME: ${REGISTRY}/your-namespace/automotive-dev-operator
+  IMAGE_NAME: ${REGISTRY}/${REGISTRY_USER}/automotive-dev-operator:latest
   VERSION: "${CI_COMMIT_SHORT_SHA}"
 
 build-operator:
