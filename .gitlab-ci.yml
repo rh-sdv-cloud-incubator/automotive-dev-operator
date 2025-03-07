@@ -7,7 +7,8 @@ variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
   REGISTRY: quay.io
-  IMAGE_NAME: ${REGISTRY}/${REGISTRY_USER}/automotive-dev-operator:latest
+  REPOSITORY: ""
+  IMAGE_NAME: ${REGISTRY}/${REPOSITORY}/automotive-dev-operator
   VERSION: "${CI_COMMIT_SHORT_SHA}"
 
 build-operator:
@@ -16,17 +17,20 @@ build-operator:
   services:
     - docker:24.0.5-dind
   before_script:
+    # Set up Docker Buildx for multi-architecture builds
     - mkdir -p ~/.docker/cli-plugins
     - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64
     - chmod +x ~/.docker/cli-plugins/docker-buildx
     - docker buildx create --name multiarch-builder --driver docker-container --use
     - docker buildx inspect --bootstrap
+    # Log in to container registry
     - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
   script:
+    # Fixed command with properly separated tags
     - docker buildx build --platform linux/amd64,linux/arm64
       --push
-      -t ${IMAGE_NAME}:${VERSION}
-      -t ${IMAGE_NAME}:latest .
+      -t "${IMAGE_NAME}:${VERSION}"
+      -t "${IMAGE_NAME}:latest" .
   only:
     - main
     - tags
