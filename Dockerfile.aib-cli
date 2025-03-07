@@ -45,7 +45,10 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-RUN chmod -R g=u /etc/pki
+# Fix permissions for user home directory and config
+RUN mkdir -p /home/user/.config && \
+    chown -R 10001:0 /home/user && \
+    chmod -R g=u /etc/pki /home/user
 
 USER 10001
 ENV HOME=/home/user
