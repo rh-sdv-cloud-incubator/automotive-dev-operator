@@ -1,9 +1,16 @@
 FROM quay.io/centos/centos:stream9
 
+ARG TARGETARCH
+
 RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled crb && \
     dnf copr enable -y @osbuild/osbuild-stable && \
     dnf copr enable -y @centos-automotive-sig/osbuild-auto
+
+RUN ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "aarch64") && \
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${ARCH}.tar.gz | \
+    tar -xzf - -C /usr/local/bin oc kubectl && \
+    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
 RUN dnf install -y \
     "@Development Tools" \
@@ -16,6 +23,7 @@ RUN dnf install -y \
     vim \
     git \
     wget \
+    curl \
     # Dependencies for building images \
     osbuild \
     osbuild-ostree \
