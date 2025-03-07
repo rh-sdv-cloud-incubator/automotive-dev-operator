@@ -7,12 +7,17 @@ RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf copr enable -y @osbuild/osbuild-stable && \
     dnf copr enable -y @centos-automotive-sig/osbuild-auto
 
-RUN ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "aarch64") && \
-    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${ARCH}.tar.gz | \
+# Install OpenShift CLI with the correct URL format
+# Use curl-minimal instead of curl, and use --allowerasing if needed
+RUN if ! command -v curl >/dev/null 2>&1; then \
+      dnf install -y --allowerasing curl-minimal; \
+    fi && \
+    mkdir -p /usr/local/bin && \
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${TARGETARCH}.tar.gz | \
     tar -xzf - -C /usr/local/bin oc kubectl && \
     chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
-RUN dnf install -y \
+RUN dnf install -y --allowerasing \
     "@Development Tools" \
     # Some convenience packages \
     bash-completion \
@@ -23,7 +28,6 @@ RUN dnf install -y \
     vim \
     git \
     wget \
-    curl \
     # Dependencies for building images \
     osbuild \
     osbuild-ostree \
@@ -69,5 +73,4 @@ RUN mkdir -p /home/user/.kube && \
     chgrp -R 0 /home/user && \
     chmod -R g=u /home/user
 
-# Set the KUBECONFIG environment variable
 ENV KUBECONFIG=/home/user/.kube/config
