@@ -1,42 +1,19 @@
-FROM quay.io/centos/centos:stream9
+FROM quay.io/devfile/base-developer-image:ubi9
 
 ARG TARGETARCH
+USER 0
 
-RUN dnf install -y 'dnf-command(config-manager)' && \
-    dnf config-manager --set-enabled crb && \
-    dnf copr enable -y @osbuild/osbuild-stable && \
-    dnf copr enable -y @centos-automotive-sig/osbuild-auto
-
-# Install OpenShift CLI with the correct URL format
-# Use curl-minimal instead of curl, and use --allowerasing if needed
-RUN if ! command -v curl >/dev/null 2>&1; then \
-      dnf install -y --allowerasing curl-minimal; \
-    fi && \
-    mkdir -p /usr/local/bin && \
+RUN mkdir -p /usr/local/bin && \
     curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${TARGETARCH}.tar.gz | \
     tar -xzf - -C /usr/local/bin oc kubectl && \
     chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
+# Install automotive-specific dependencies
 RUN dnf install -y --allowerasing \
     "@Development Tools" \
-    # Some convenience packages \
-    bash-completion \
-    dnf \
-    emacs \
-    less \
-    strace \
-    vim \
-    git \
-    wget \
-    # Dependencies for building images \
-    osbuild \
-    osbuild-ostree \
-    osbuild-tools \
-    osbuild-auto \
     pesign \
-    # Dependencies to build the kernel's RPM \
+    # Dependencies to build the kernel's RPM
     rpm-build \
-    hostname \
     openssl-devel \
     bc \
     binutils-devel \
@@ -48,12 +25,10 @@ RUN dnf install -y --allowerasing \
     libcap-ng-devel \
     libmnl-devel \
     llvm \
-    net-tools \
     numactl-devel \
     perl-devel \
     python3-devel \
-    python3-docutils \
-    rsync && \
+    python3-docutils && \
     dnf clean all
 
 COPY --from=golang:1.23 /usr/local/go /usr/local/go
@@ -68,7 +43,8 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-RUN chgrp -R 0 /home && chmod -R g=u /etc/passwd /etc/group /home /etc/pki
-ENV KUBECONFIG=/home/user/.kube/config
+RUN chmod -R g=u /etc/pki
+
 USER 10001
 ENV HOME=/home/user
+WORKDIR /projects
