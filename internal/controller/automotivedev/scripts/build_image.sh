@@ -47,10 +47,10 @@ if [ -n "$(params.mode)" ]; then
   mode_param="--mode $(params.mode)"
 fi
 
-MPP_FILE=$(cat /tekton/results/mpp-file-path)
+MANIFEST_FILE=$(cat /tekton/results/manifest-file-path)
 
 CUSTOM_DEFS=""
-CUSTOM_DEFS_FILE="$(workspaces.mpp-config-workspace.path)/custom-definitions.env"
+CUSTOM_DEFS_FILE="$(workspaces.manifest-config-workspace.path)/custom-definitions.env"
 if [ -f "$CUSTOM_DEFS_FILE" ]; then
   echo "Processing custom definitions from $CUSTOM_DEFS_FILE"
   while read -r line || [[ -n "$line" ]]; do
@@ -82,7 +82,7 @@ build_command="automotive-image-builder --verbose \
   --export $(params.export-format) \
   --osbuild-manifest=/output/image.json \
   $mode_param \
-  $MPP_FILE \
+  $MANIFEST_FILE \
   /output/${exportFile}"
 
 echo "Running the build command: $build_command"

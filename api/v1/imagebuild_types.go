@@ -50,8 +50,8 @@ type ImageBuildSpec struct {
 	// AutomativeOSBuildImage specifies the image to use for building
 	AutomativeOSBuildImage string `json:"automativeOSBuildImage,omitempty"`
 
-	// MppConfigMap specifies the name of the ConfigMap containing the MPP configuration
-	MppConfigMap string `json:"mppConfigMap,omitempty"`
+	// ManifestConfigMap specifies the name of the ConfigMap containing the manifest configuration
+	ManifestConfigMap string `json:"manifestConfigMap,omitempty"`
 
 	// Publishers defines where to publish the built artifacts
 	Publishers *Publishers `json:"publishers,omitempty"`

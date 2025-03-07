@@ -114,7 +114,6 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
 	log.Info("Creating PipelineRun for ImageBuild")
 
-	// First get the pipeline from the operator namespace to verify it exists
 	operatorPipeline := &tektonv1.Pipeline{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      "automotive-build-pipeline",
@@ -176,13 +175,6 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 			},
 		},
 		{
-			Name: "storage-class",
-			Value: tektonv1.ParamValue{
-				Type:      tektonv1.ParamTypeString,
-				StringVal: imageBuild.Spec.StorageClass,
-			},
-		},
-		{
 			Name: "automotive-osbuild-image",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
@@ -199,14 +191,25 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 			},
 		},
 		{
-			Name: "mpp-config-workspace",
+			Name: "manifest-config-workspace",
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{
-					Name: imageBuild.Spec.MppConfigMap,
+					Name: imageBuild.Spec.ManifestConfigMap,
 				},
 			},
 		},
 	}
+
+	if imageBuild.Spec.StorageClass != "" {
+    params = append(params, tektonv1.Param{
+        Name: "storage-class",
+        Value: tektonv1.ParamValue{
+            Type:      tektonv1.ParamTypeString,
+            StringVal: imageBuild.Spec.StorageClass,
+        },
+    })
+}
+
 
 	if imageBuild.Spec.Publishers != nil && imageBuild.Spec.Publishers.Registry != nil {
 		params = append(params,
@@ -247,8 +250,17 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 					corev1.ResourceStorage: storageSize,
 				},
 			},
-			StorageClassName: &imageBuild.Spec.StorageClass,
 		},
+	}
+
+	if imageBuild.Spec.StorageClass != "" {
+		pvc.Spec.StorageClassName = &imageBuild.Spec.StorageClass
+	}
+
+	if err := r.Create(ctx, pvc); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create shared workspace PVC: %w", err)
+		}
 	}
 
 	if err := r.Create(ctx, pvc); err != nil {
@@ -378,7 +390,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			log.Error(err, "Failed to create artifact serving pod")
 		}
 
-		rsyncCommand := fmt.Sprintf("mkdir -p ./output && oc rsync %s:/artifacts/ ./output/ -n %s -c artifact-server",
+		rsyncCommand := fmt.Sprintf("mkdir -p ./output && oc rsync %s:/artifacts/ ./output/ -n %s -c artifact-server --progress=true --compress=true",
 			podName, imageBuild.Namespace)
 
 		imageBuild.Status.RsyncCommand = rsyncCommand
@@ -407,7 +419,6 @@ func (r *ImageBuildReconciler) createArtifactServingPod(ctx context.Context, ima
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "automotive-dev-operator",
 				"imagebuild-name":              imageBuild.Name,
-				"purpose":                      "serve-artifacts",
 			},
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),

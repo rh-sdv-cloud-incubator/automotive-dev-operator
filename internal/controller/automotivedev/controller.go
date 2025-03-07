@@ -113,8 +113,8 @@ func (r *AutomotiveDevReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-//go:embed scripts/find_mpp.sh
-var findMppScript string
+//go:embed scripts/find_manifest.sh
+var findManifestScript string
 
 //go:embed scripts/build_image.sh
 var buildImageScript string
@@ -185,7 +185,11 @@ func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 				{
 					Name:        "storage-class",
 					Type:        tektonv1.ParamTypeString,
-					Description: "Storage class for the PVC to build on",
+					Description: "Storage class for the PVC to build on (optional, uses cluster default if not specified)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
 				},
 				{
 					Name: "automotive-osbuild-image",
@@ -217,7 +221,7 @@ func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 			},
 			Workspaces: []tektonv1.PipelineWorkspaceDeclaration{
 				{Name: "shared-workspace"},
-				{Name: "mpp-config-workspace"},
+				{Name: "manifest-config-workspace"},
 			},
 			Tasks: []tektonv1.PipelineTask{
 				{
@@ -296,7 +300,7 @@ func generateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					},
 					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
 						{Name: "shared-workspace", Workspace: "shared-workspace"},
-						{Name: "mpp-config-workspace", Workspace: "mpp-config-workspace"},
+						{Name: "manifest-config-workspace", Workspace: "manifest-config-workspace"},
 					},
 					Timeout: &metav1.Duration{Duration: 1 * time.Hour},
 				},
@@ -532,8 +536,8 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 			},
 			Results: []tektonv1.TaskResult{
 				{
-					Name:        "mpp-file-path",
-					Description: "Path to the MPP file used for building",
+					Name:        "manifest-file-path",
+					Description: "Path to the manifest file used for building",
 				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
@@ -543,16 +547,16 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 					MountPath:   "/workspace/shared",
 				},
 				{
-					Name:        "mpp-config-workspace",
-					Description: "Workspace for MPP configuration",
-					MountPath:   "/workspace/mpp-config",
+					Name:        "manifest-config-workspace",
+					Description: "Workspace for manifest configuration",
+					MountPath:   "/workspace/manifest-config",
 				},
 			},
 			Steps: []tektonv1.Step{
 				{
-					Name:   "find-mpp-file",
+					Name:   "find-manifest-file",
 					Image:  "quay.io/prometheus/busybox:latest",
-					Script: findMppScript,
+					Script: findManifestScript,
 				},
 				{
 					Name:  "build-image",
@@ -564,8 +568,6 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 						},
 						Capabilities: &corev1.Capabilities{
 							Add: []corev1.Capability{
-								"SYS_ADMIN",
-								"MKNOD",
 							},
 						},
 					},
@@ -582,10 +584,6 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 						{
 							Name:      "run-dir",
 							MountPath: "/run/osbuild",
-						},
-						{
-							Name:      "dev",
-							MountPath: "/dev",
 						},
 					},
 				},
@@ -607,14 +605,6 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 					Name: "run-dir",
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
-				{
-					Name: "dev",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
-							Path: "/dev",
-						},
 					},
 				},
 			},

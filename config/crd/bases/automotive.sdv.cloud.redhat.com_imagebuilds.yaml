@@ -53,12 +53,12 @@ spec:
               exportFormat:
                 description: ExportFormat specifies the output format (image, qcow2)
                 type: string
+              manifestConfigMap:
+                description: ManifestConfigMap specifies the name of the ConfigMap
+                  containing the manifest configuration
+                type: string
               mode:
                 description: Mode specifies the build mode (package, image)
-                type: string
-              mppConfigMap:
-                description: MppConfigMap specifies the name of the ConfigMap containing
-                  the MPP configuration
                 type: string
               publishers:
                 description: Publishers defines where to publish the built artifacts

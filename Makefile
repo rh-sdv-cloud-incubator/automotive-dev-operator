@@ -325,3 +325,7 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
+
+.PHONY: build-cli
+build-cli: ## Build the aid-cli tool
+	go build -o bin/aid-cli cmd/aid-cli/main.go
