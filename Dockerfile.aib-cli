@@ -63,3 +63,11 @@ COPY api/ api/
 COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
+
+RUN mkdir -p /home/user/.kube && \
+    chmod -R 775 /home/user && \
+    chgrp -R 0 /home/user && \
+    chmod -R g=u /home/user
+
+# Set the KUBECONFIG environment variable
+ENV KUBECONFIG=/home/user/.kube/config
