@@ -201,15 +201,14 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 	}
 
 	if imageBuild.Spec.StorageClass != "" {
-    params = append(params, tektonv1.Param{
-        Name: "storage-class",
-        Value: tektonv1.ParamValue{
-            Type:      tektonv1.ParamTypeString,
-            StringVal: imageBuild.Spec.StorageClass,
-        },
-    })
-}
-
+		params = append(params, tektonv1.Param{
+			Name: "storage-class",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: imageBuild.Spec.StorageClass,
+			},
+		})
+	}
 
 	if imageBuild.Spec.Publishers != nil && imageBuild.Spec.Publishers.Registry != nil {
 		params = append(params,

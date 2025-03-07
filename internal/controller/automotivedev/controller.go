@@ -567,8 +567,7 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 							Type: "unconfined_t",
 						},
 						Capabilities: &corev1.Capabilities{
-							Add: []corev1.Capability{
-							},
+							Add: []corev1.Capability{},
 						},
 					},
 					Script: buildImageScript,
