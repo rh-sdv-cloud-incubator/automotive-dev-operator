@@ -1,6 +1,5 @@
+# Build the manager binary
 FROM golang:1.23 AS builder
-ARG TARGETOS
-ARG TARGETARCH
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -11,39 +10,15 @@ COPY go.sum go.sum
 RUN go mod download
 
 # Copy the go source
-COPY cmd/ cmd/
+COPY cmd/main.go cmd/main.go
 COPY api/ api/
-COPY internal/ internal/
+COPY internal/controller/ internal/controller/
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -o manager cmd/main.go
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -o aib-cli cmd/aib-cli/main.go
+RUN CGO_ENABLED=0 go build -a -o manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi9/ubi:latest
-
-RUN dnf update -y && \
-    dnf group install -y "Development Tools" && \
-    dnf install -y \
-    openssh-clients \
-    rsync \
-    tar \
-    gzip \
-    vim \
-    zlib-devel \
-    openssl-devel \
-    libffi-devel \
-    readline-devel \
-    sqlite-devel \
-    && dnf clean all \
-    && rm -rf /var/cache/dnf
-
+FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
-COPY --from=builder /workspace/aib-cli /usr/local/bin/
-
-# Create a non-root user to run the manager
-RUN useradd -u 65532 -r -g 0 -s /sbin/nologin \
-    -c "Automotive Dev Operator user" nonroot
-
-USER 65532:0
+USER 65532:65532
 
 ENTRYPOINT ["/manager"]

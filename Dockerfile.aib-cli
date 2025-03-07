@@ -1,0 +1,59 @@
+FROM quay.io/centos/centos:stream9
+
+RUN dnf install -y 'dnf-command(config-manager)' && \
+    dnf config-manager --set-enabled crb && \
+    dnf copr enable -y @osbuild/osbuild-stable && \
+    dnf copr enable -y @centos-automotive-sig/osbuild-auto
+
+RUN dnf install -y \
+    "@Development Tools" \
+    # Some convenience packages \
+    bash-completion \
+    dnf \
+    emacs \
+    less \
+    strace \
+    vim \
+    git \
+    wget \
+    # Dependencies for building images \
+    osbuild \
+    osbuild-ostree \
+    osbuild-tools \
+    osbuild-auto \
+    pesign \
+    # Dependencies to build the kernel's RPM \
+    rpm-build \
+    hostname \
+    openssl-devel \
+    bc \
+    binutils-devel \
+    bpftool \
+    clang \
+    dwarves \
+    gcc-plugin-devel \
+    libcap-devel \
+    libcap-ng-devel \
+    libmnl-devel \
+    llvm \
+    net-tools \
+    numactl-devel \
+    perl-devel \
+    python3-devel \
+    python3-docutils \
+    rsync && \
+    dnf clean all
+
+COPY --from=golang:1.23 /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/go"
+
+WORKDIR /workspace
+COPY go.mod go.sum ./
+COPY cmd/aib-cli cmd/aib-cli/
+COPY api/ api/
+COPY internal/ internal/
+
+RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
+
+CMD ["/usr/bin/bash"]
