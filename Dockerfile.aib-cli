@@ -55,5 +55,3 @@ COPY api/ api/
 COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
-
-CMD ["/usr/bin/bash"]
