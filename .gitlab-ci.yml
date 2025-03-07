@@ -12,6 +12,8 @@ variables:
   VERSION: "${CI_COMMIT_SHORT_SHA}"
 
 build-operator:
+  tags:
+    - arm64
   stage: build
   image: docker:24.0.5
   services:
@@ -19,7 +21,7 @@ build-operator:
   before_script:
     # Set up Docker Buildx for multi-architecture builds
     - mkdir -p ~/.docker/cli-plugins
-    - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64
+    - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-arm64  # Note: Using arm64 version
     - chmod +x ~/.docker/cli-plugins/docker-buildx
     - docker buildx create --name multiarch-builder --driver docker-container --use
     - docker buildx inspect --bootstrap
@@ -27,10 +29,10 @@ build-operator:
     - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
   script:
     # Fixed command with properly separated tags
-    - docker buildx build --platform linux/amd64,linux/arm64
+    - docker buildx build --platform linux/arm64
       --push
-      -t "${IMAGE_NAME}:${VERSION}"
-      -t "${IMAGE_NAME}:latest" .
+      -t "${IMAGE_NAME}:${VERSION}-arm64"
+      -t "${IMAGE_NAME}:latest-arm64" .
   only:
     - main
     - tags
