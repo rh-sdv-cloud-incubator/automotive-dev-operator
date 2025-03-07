@@ -327,5 +327,5 @@ catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
 
 .PHONY: build-cli
-build-cli: ## Build the aid-cli tool
-	go build -o bin/aid-cli cmd/aid-cli/main.go
+build-cli: ## Build the aib-cli tool
+	go build -o bin/aib-cli cmd/aib-cli/main.go

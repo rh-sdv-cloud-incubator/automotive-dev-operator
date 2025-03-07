@@ -20,7 +20,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
+	"k8s.io/utils/ptr"
 
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
@@ -162,47 +162,54 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	var imageBuild *automotivev1.ImageBuild
+	// Create a new ImageBuild every time
+	if buildName == "" {
+		fmt.Println("Error: --name flag is required")
+		os.Exit(1)
+	}
 
-	// If config file is provided, use it
-	if imageBuildCfg != "" {
-		data, err := os.ReadFile(imageBuildCfg)
+	// Delete existing ImageBuild if it exists to ensure a fresh build
+	existingIB := &automotivev1.ImageBuild{}
+	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existingIB)
+	if err == nil {
+		fmt.Printf("Deleting existing ImageBuild %s\n", buildName)
+		if err := c.Delete(ctx, existingIB); err != nil {
+			fmt.Printf("Error deleting existing ImageBuild: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Wait for deletion to complete
+		fmt.Printf("Waiting for ImageBuild %s to be deleted...\n", buildName)
+		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			err := c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, &automotivev1.ImageBuild{})
+			return errors.IsNotFound(err), nil
+		})
 		if err != nil {
-			fmt.Printf("Error reading config file: %v\n", err)
+			fmt.Printf("Error waiting for ImageBuild deletion: %v\n", err)
 			os.Exit(1)
 		}
+	} else if !errors.IsNotFound(err) {
+		fmt.Printf("Error checking for existing ImageBuild: %v\n", err)
+		os.Exit(1)
+	}
 
-		imageBuild = &automotivev1.ImageBuild{}
-		if err := yaml.Unmarshal(data, imageBuild); err != nil {
-			fmt.Printf("Error parsing YAML: %v\n", err)
-			os.Exit(1)
-		}
-
-		imageBuild.Namespace = namespace
-	} else {
-		// Create ImageBuild from flags
-		if buildName == "" {
-			fmt.Println("Error: --name flag is required when not using --config")
-			os.Exit(1)
-		}
-
-		imageBuild = &automotivev1.ImageBuild{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      buildName,
-				Namespace: namespace,
-			},
-			Spec: automotivev1.ImageBuildSpec{
-				Distro:                 distro,
-				Target:                 target,
-				Architecture:           architecture,
-				ExportFormat:           exportFormat,
-				Mode:                   mode,
-				AutomativeOSBuildImage: osbuildImage,
-				StorageClass:           storageClass,
-				ServeArtifact:          true, // Enable artifact serving by default
-				ServeExpiryHours:       24,   // Set default expiry to 24 hours
-			},
-		}
+	// Create the ImageBuild resource
+	imageBuild := &automotivev1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      buildName,
+			Namespace: namespace,
+		},
+		Spec: automotivev1.ImageBuildSpec{
+			Distro:                 distro,
+			Target:                 target,
+			Architecture:           architecture,
+			ExportFormat:           exportFormat,
+			Mode:                   mode,
+			AutomativeOSBuildImage: osbuildImage,
+			StorageClass:           storageClass,
+			ServeArtifact:          true, // Enable artifact serving by default
+			ServeExpiryHours:       24,   // Set default expiry to 24 hours
+		},
 	}
 
 	if manifest == "" {
@@ -213,6 +220,14 @@ func runBuild(cmd *cobra.Command, args []string) {
 	configMapName := fmt.Sprintf("%s-manifest-config", imageBuild.Name)
 	imageBuild.Spec.ManifestConfigMap = configMapName
 
+	// First create the ImageBuild
+	fmt.Printf("Creating ImageBuild %s\n", imageBuild.Name)
+	if err := c.Create(ctx, imageBuild); err != nil {
+		fmt.Printf("Error creating ImageBuild: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Now that we have the ImageBuild with UID, create/update ConfigMap with owner reference
 	manifestData, err := os.ReadFile(manifest)
 	if err != nil {
 		fmt.Printf("Error reading manifest file: %v\n", err)
@@ -224,57 +239,54 @@ func runBuild(cmd *cobra.Command, args []string) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configMapName,
 			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "automotive.sdv.cloud.redhat.com/v1",
+					Kind:       "ImageBuild",
+					Name:       imageBuild.Name,
+					UID:        imageBuild.UID,
+					Controller: ptr.To(true),
+				},
+			},
 		},
 		Data: map[string]string{
 			fileName: string(manifestData),
 		},
 	}
 
+	// Delete existing ConfigMap if it exists
 	existingCM := &corev1.ConfigMap{}
 	err = c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, existingCM)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			fmt.Printf("Creating ConfigMap %s\n", configMapName)
-			if err := c.Create(ctx, configMap); err != nil {
-				fmt.Printf("Error creating ConfigMap: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Printf("Error checking ConfigMap: %v\n", err)
+	if err == nil {
+		fmt.Printf("Deleting existing ConfigMap %s\n", configMapName)
+		if err := c.Delete(ctx, existingCM); err != nil {
+			fmt.Printf("Error deleting ConfigMap: %v\n", err)
 			os.Exit(1)
 		}
-	} else {
-		fmt.Printf("Updating existing ConfigMap %s\n", configMapName)
-		existingCM.Data = configMap.Data
-		if err := c.Update(ctx, existingCM); err != nil {
-			fmt.Printf("Error updating ConfigMap: %v\n", err)
+
+		// Wait for deletion to complete
+		fmt.Printf("Waiting for ConfigMap %s to be deleted...\n", configMapName)
+		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, &corev1.ConfigMap{})
+			return errors.IsNotFound(err), nil
+		})
+		if err != nil {
+			fmt.Printf("Error waiting for ConfigMap deletion: %v\n", err)
 			os.Exit(1)
 		}
+	} else if !errors.IsNotFound(err) {
+		fmt.Printf("Error checking for existing ConfigMap: %v\n", err)
+		os.Exit(1)
 	}
 
-	existingIB := &automotivev1.ImageBuild{}
-	err = c.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: namespace}, existingIB)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			fmt.Printf("Creating ImageBuild %s\n", imageBuild.Name)
-			if err := c.Create(ctx, imageBuild); err != nil {
-				fmt.Printf("Error creating ImageBuild: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Printf("Error checking ImageBuild: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		fmt.Printf("ImageBuild %s already exists, updating...\n", imageBuild.Name)
-		existingIB.Spec = imageBuild.Spec
-		if err := c.Update(ctx, existingIB); err != nil {
-			fmt.Printf("Error updating ImageBuild: %v\n", err)
-			os.Exit(1)
-		}
+	// Create the ConfigMap with owner reference
+	fmt.Printf("Creating ConfigMap %s\n", configMapName)
+	if err := c.Create(ctx, configMap); err != nil {
+		fmt.Printf("Error creating ConfigMap: %v\n", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("ImageBuild %s created/updated successfully in namespace %s\n", imageBuild.Name, namespace)
+	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
 
 	if waitForBuild {
 		fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)

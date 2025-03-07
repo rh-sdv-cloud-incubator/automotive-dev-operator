@@ -13,7 +13,7 @@ variables:
 
 build-operator:
   tags:
-    - arm64
+    - saas-linux-small-arm64
   stage: build
   image: docker:24.0.5
   services:
