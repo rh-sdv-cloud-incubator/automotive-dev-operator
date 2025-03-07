@@ -11,7 +11,7 @@ variables:
   IMAGE_NAME: ${REGISTRY}/${REPOSITORY}/automotive-dev-operator
   VERSION: "${CI_COMMIT_SHORT_SHA}"
 
-build-operator:
+build-operator-arm64:
   tags:
     - saas-linux-small-arm64
   stage: build
@@ -19,16 +19,13 @@ build-operator:
   services:
     - docker:24.0.5-dind
   before_script:
-    # Set up Docker Buildx for multi-architecture builds
     - mkdir -p ~/.docker/cli-plugins
     - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-arm64  # Note: Using arm64 version
     - chmod +x ~/.docker/cli-plugins/docker-buildx
     - docker buildx create --name multiarch-builder --driver docker-container --use
     - docker buildx inspect --bootstrap
-    # Log in to container registry
     - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
   script:
-    # Fixed command with properly separated tags
     - docker buildx build --platform linux/arm64
       --push
       -t "${IMAGE_NAME}:${VERSION}-arm64"
@@ -36,3 +33,26 @@ build-operator:
   only:
     - main
     - tags
+
+# build-operator-amd64:
+#   tags:
+#     - saas-linux-small-amd64
+#   stage: build
+#   image: docker:24.0.5
+#   services:
+#     - docker:24.0.5-dind
+#   before_script:
+#     - mkdir -p ~/.docker/cli-plugins
+#     - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64  # Note: Using amd64 version
+#     - chmod +x ~/.docker/cli-plugins/docker-buildx
+#     - docker buildx create --name multiarch-builder --driver docker-container --use
+#     - docker buildx inspect --bootstrap
+#     - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
+#   script:
+#     - docker buildx build --platform linux/amd64
+#       --push
+#       -t "${IMAGE_NAME}:${VERSION}-amd64"
+#       -t "${IMAGE_NAME}:latest-amd64" .
+#   only:
+#     - main
+#     - tags
