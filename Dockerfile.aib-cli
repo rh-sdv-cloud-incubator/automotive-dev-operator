@@ -1,4 +1,4 @@
-FROM quay.io/devfile/base-developer-image:ubi9
+FROM quay.io/devfile/base-developer-image:ubi9-latest
 
 ARG TARGETARCH
 USER 0
@@ -8,24 +8,26 @@ RUN mkdir -p /usr/local/bin && \
     tar -xzf - -C /usr/local/bin oc kubectl && \
     chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
-# Install automotive-specific dependencies
+RUN dnf install -y 'dnf-command(config-manager)' && \
+    dnf config-manager --set-enabled codeready-builder-for-rhel-9-${TARGETARCH}-rpms || true && \
+    dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || true
+
 RUN dnf install -y --allowerasing \
-    "@Development Tools" \
-    pesign \
-    # Dependencies to build the kernel's RPM
+    gcc \
+    gcc-c++ \
+    make \
+    automake \
+    autoconf \
+    libtool \
+    pkgconfig \
     rpm-build \
     openssl-devel \
     bc \
-    binutils-devel \
-    bpftool \
     clang \
-    dwarves \
-    gcc-plugin-devel \
     libcap-devel \
     libcap-ng-devel \
     libmnl-devel \
     llvm \
-    numactl-devel \
     perl-devel \
     python3-devel \
     python3-docutils && \
