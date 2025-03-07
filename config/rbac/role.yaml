@@ -25,6 +25,7 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims
+  - pods
   - serviceaccounts
   verbs:
   - create

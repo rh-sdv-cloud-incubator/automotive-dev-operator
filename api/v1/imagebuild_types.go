@@ -58,6 +58,12 @@ type ImageBuildSpec struct {
 
 	// RuntimeClassName specifies the runtime class to use for the build pod
 	RuntimeClassName string `json:"runtimeClassName,omitempty"`
+
+	// ServeArtifact determines whether to make the built artifact available for download
+	ServeArtifact bool `json:"serveArtifact,omitempty"`
+
+	// ServeExpiryHours specifies how long to serve the artifact before cleanup (default: 24)
+	ServeExpiryHours int32 `json:"serveExpiryHours,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing
@@ -88,6 +94,18 @@ type ImageBuildStatus struct {
 
 	// Message provides more detail about the current phase
 	Message string `json:"message,omitempty"`
+
+	// PVCName is the name of the PVC where the artifact is stored
+	PVCName string `json:"pvcName,omitempty"`
+
+	// ArtifactPath is the path inside the PVC where the artifact is stored
+	ArtifactPath string `json:"artifactPath,omitempty"`
+
+	// ArtifactFileName is the name of the artifact file inside the PVC
+	ArtifactFileName string `json:"artifactFileName,omitempty"`
+
+	// RsyncCommand provides a sample command for downloading the artifact
+	RsyncCommand string `json:"rsyncCommand,omitempty"`
 }
 
 // +kubebuilder:object:root=true

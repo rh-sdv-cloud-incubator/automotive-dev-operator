@@ -83,6 +83,15 @@ spec:
                 description: RuntimeClassName specifies the runtime class to use for
                   the build pod
                 type: string
+              serveArtifact:
+                description: ServeArtifact determines whether to make the built artifact
+                  available for download
+                type: boolean
+              serveExpiryHours:
+                description: 'ServeExpiryHours specifies how long to serve the artifact
+                  before cleanup (default: 24)'
+                format: int32
+                type: integer
               storageClass:
                 description: StorageClass is the name of the storage class to use
                   for the build PVC
@@ -94,6 +103,14 @@ spec:
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
+              artifactFileName:
+                description: ArtifactFileName is the name of the artifact file inside
+                  the PVC
+                type: string
+              artifactPath:
+                description: ArtifactPath is the path inside the PVC where the artifact
+                  is stored
+                type: string
               completionTime:
                 description: CompletionTime is when the build finished
                 format: date-time
@@ -104,6 +121,14 @@ spec:
               phase:
                 description: Phase represents the current phase of the build (Building,
                   Completed, Failed)
+                type: string
+              pvcName:
+                description: PVCName is the name of the PVC where the artifact is
+                  stored
+                type: string
+              rsyncCommand:
+                description: RsyncCommand provides a sample command for downloading
+                  the artifact
                 type: string
               startTime:
                 description: StartTime is when the build started

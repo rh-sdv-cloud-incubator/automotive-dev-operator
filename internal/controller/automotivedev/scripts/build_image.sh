@@ -28,15 +28,19 @@ mount --bind "$destPath" "$osbuildPath"
 
 cd $(workspaces.shared-workspace.path)
 
+# Determine file extension
 if [ "$(params.export-format)" = "image" ]; then
   file_extension=".raw"
 elif [ "$(params.export-format)" = "qcow2" ]; then
   file_extension=".qcow2"
 else
-  file_extension="$(params.export-format)"
+  file_extension=".$(params.export-format)"
 fi
 
-exportFile=$(params.distro)-$(params.target)-$(params.export-format)${file_extension}
+# Create a cleaner output filename
+# Use distro and target without repeating the format in the name
+cleanName=$(params.distro)-$(params.target)
+exportFile=${cleanName}${file_extension}
 
 mode_param=""
 if [ -n "$(params.mode)" ]; then
@@ -85,6 +89,21 @@ echo "Running the build command: $build_command"
 $build_command
 
 pushd /output
-ln -s ./${exportFile} ./disk.img
-echo "Build command completed. Listing output directory:"
-ls -l
+ln -sf ./${exportFile} ./disk.img
+
+echo "copying build artifacts to shared workspace..."
+
+mkdir -p $(workspaces.shared-workspace.path)
+
+cp -v /output/${exportFile} $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+
+cp -vL /output/disk.img $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
+
+pushd $(workspaces.shared-workspace.path)
+ln -sf ${exportFile} disk.img
+popd
+
+cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo "Failed to copy image.json"
+
+echo "Contents of shared workspace:"
+ls -la $(workspaces.shared-workspace.path)/
