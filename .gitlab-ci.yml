@@ -1,5 +1,6 @@
 stages:
   - build
+  - release
 
 variables:
   BUILDX_VERSION: "0.11.2"
@@ -11,52 +12,42 @@ variables:
   OPERATOR_IMAGE: ${REGISTRY}/${REPOSITORY}/automotive-dev-operator
   AIB_BASE_IMAGE: ${REGISTRY}/${REPOSITORY}/aib-base-dev
   VERSION: "${CI_COMMIT_SHORT_SHA}"
+  AIB_CLI_BINARY: "aib-cli"
 
-.docker-setup: &docker-setup
-  before_script:
-    - mkdir -p ~/.docker/cli-plugins
-    - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${ARCH}
-    - chmod +x ~/.docker/cli-plugins/docker-buildx
-    - docker buildx create --name multiarch-builder --driver docker-container --use
-    - docker buildx inspect --bootstrap
-    - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
-
-build-operator-arm64:
+build-aib-cli:
   tags:
     - saas-linux-small-arm64
   stage: build
-  image: docker:24.0.5
-  services:
-    - docker:24.0.5-dind
-  variables:
-    ARCH: arm64
-  <<: *docker-setup
+  image: golang:1.23-alpine
   script:
-    - docker buildx build --platform linux/arm64
-      --push
-      -f Dockerfile
-      -t "${OPERATOR_IMAGE}:${VERSION}-arm64"
-      -t "${OPERATOR_IMAGE}:latest-arm64" .
+    - apk add --no-cache make git bash
+    - mkdir -p ./bin
+    - make build-cli
+    - cp bin/aib-cli ${AIB_CLI_BINARY}-${VERSION}-arm64
+  artifacts:
+    paths:
+      - ${AIB_CLI_BINARY}-${VERSION}-arm64
+    expire_in: 1 week
   only:
     - main
     - tags
 
-build-aib-base-arm64:
-  tags:
-    - saas-linux-small-arm64
-  stage: build
-  image: docker:24.0.5
-  services:
-    - docker:24.0.5-dind
-  variables:
-    ARCH: arm64
-  <<: *docker-setup
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build-aib-cli
   script:
-    - docker buildx build --platform linux/arm64
-      --push
-      -f Dockerfile.aib-cli
-      -t "${AIB_BASE_IMAGE}:${VERSION}-arm64"
-      -t "${AIB_BASE_IMAGE}:latest-arm64" .
+    - echo "Creating release for version ${VERSION}"
+  release:
+    name: "Release ${VERSION}"
+    description: "Automotive Image Builder CLI ${VERSION}"
+    tag_name: "${VERSION}"
+    ref: "${CI_COMMIT_SHA}"
+    assets:
+      links:
+        - name: "${AIB_CLI_BINARY}-arm64"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/${AIB_CLI_BINARY}-${VERSION}-arm64?job=build-aib-cli"
+          link_type: "package"
   only:
-    - main
     - tags
