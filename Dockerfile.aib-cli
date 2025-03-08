@@ -39,17 +39,25 @@ RUN dnf install -y --allowerasing \
     libmnl-devel \
     llvm \
     perl-devel \
-    python3-devel \
     python3-docutils \
-    python3 \
-    ustreamer \
-    libusb1 && \
+    zlib-devel \
+    bzip2-devel \
+    libffi-devel \
+    readline-devel \
+    sqlite-devel \
+    tk-devel && \
+    dnf clean all
+
+RUN dnf install -y libusb || dnf install -y libusb1 || true && \
     dnf clean all
 
 COPY --from=uv /uv /uvx /bin/
 COPY --from=golang:1.23 /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/go"
+
+RUN /uvx python install 3.11
+ENV PATH="/root/.uv/py/3.11/bin:${PATH}"
 
 WORKDIR /workspace
 COPY go.mod go.sum ./
@@ -59,7 +67,7 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-RUN uv venv /jumpstarter
+RUN uv venv --python /root/.uv/py/3.11/bin/python /jumpstarter
 COPY --from=builder /src/dist/*.whl /tmp/
 RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
 ENV PATH="/jumpstarter/bin:${PATH}"

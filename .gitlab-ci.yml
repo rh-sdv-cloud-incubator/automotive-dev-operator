@@ -83,11 +83,16 @@ build-aib-cli:
 
 create-release:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: alpine:latest
   needs:
     - build-aib-cli
   script:
-    - echo "Creating release for version ${VERSION}"
+    - apk add --no-cache curl
+    - 'curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file ${AIB_CLI_BINARY}-${VERSION}-arm64 "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"'
+    - echo "Package uploaded to ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
+  artifacts:
+    paths:
+      - ${AIB_CLI_BINARY}-${VERSION}-arm64
   release:
     name: "Release ${VERSION}"
     description: "Automotive Image Builder CLI ${VERSION}"
@@ -96,8 +101,7 @@ create-release:
     assets:
       links:
         - name: "${AIB_CLI_BINARY}-arm64"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/${AIB_CLI_BINARY}-${VERSION}-arm64?job=build-aib-cli"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
           link_type: "package"
   only:
-    - main
     - tags
