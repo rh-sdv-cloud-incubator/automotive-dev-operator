@@ -1,3 +1,13 @@
+FROM --platform=${BUILDPLATFORM:-linux/arm64} ghcr.io/astral-sh/uv:latest AS uv
+
+FROM fedora:40 AS builder
+RUN dnf install -y make git && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+COPY --from=uv /uv /uvx /bin/
+RUN git clone https://github.com/jumpstarter-dev/jumpstarter.git /src
+RUN make -C /src build
+
 FROM quay.io/devfile/base-developer-image:ubi9-latest
 
 ARG TARGETARCH
@@ -30,9 +40,13 @@ RUN dnf install -y --allowerasing \
     llvm \
     perl-devel \
     python3-devel \
-    python3-docutils && \
+    python3-docutils \
+    python3 \
+    ustreamer \
+    libusb1 && \
     dnf clean all
 
+COPY --from=uv /uv /uvx /bin/
 COPY --from=golang:1.23 /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/go"
@@ -45,10 +59,13 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-# Fix permissions for user home directory and config
-RUN mkdir -p /home/user/.config && \
-    chown -R 10001:0 /home/user && \
-    chmod -R g=u /etc/pki /home/user
+RUN uv venv /jumpstarter
+COPY --from=builder /src/dist/*.whl /tmp/
+RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
+ENV PATH="/jumpstarter/bin:${PATH}"
+
+RUN mkdir -p /home/user/.config/jumpstarter/clients
+RUN chown 10001:0 -R /home/user/{.config,.local,.cache} && chmod g+rwx -R /home/user/{.config,.local,.cache}
 
 USER 10001
 ENV HOME=/home/user
