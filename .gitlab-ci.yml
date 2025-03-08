@@ -58,7 +58,8 @@ build-aib-base-arm64:
       --push
       -f Dockerfile.aib-cli
       -t "${AIB_BASE_IMAGE}:${VERSION}-arm64"
-      -t "${AIB_BASE_IMAGE}:latest-arm64" .
+      -t "${AIB_BASE_IMAGE}:latest-arm64" 
+      -t "${AIB_BASE_IMAGE}:latest" .
   only:
     - main
     - tags
