@@ -31,21 +31,10 @@ RUN dnf install -y --allowerasing \
     libtool \
     pkgconfig \
     rpm-build \
-    openssl-devel \
     bc \
     clang \
-    libcap-devel \
-    libcap-ng-devel \
-    libmnl-devel \
     llvm \
-    perl-devel \
-    python3-docutils \
-    zlib-devel \
-    bzip2-devel \
-    libffi-devel \
-    readline-devel \
-    sqlite-devel \
-    tk-devel && \
+    python3-docutils && \
     dnf clean all
 
 RUN dnf install -y libusb || dnf install -y libusb1 || true && \
