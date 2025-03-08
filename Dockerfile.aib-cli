@@ -14,7 +14,7 @@ ARG TARGETARCH
 USER 0
 
 RUN mkdir -p /usr/local/bin && \
-    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${TARGETARCH}.tar.gz | \
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-${TARGETARCH}-rhel9.tar.gz | \
     tar -xzf - -C /usr/local/bin oc kubectl && \
     chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
@@ -40,13 +40,13 @@ RUN dnf install -y --allowerasing \
 RUN dnf install -y libusb || dnf install -y libusb1 || true && \
     dnf clean all
 
-COPY --from=uv /uv /uvx /bin/
 COPY --from=golang:1.23 /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/go"
 
-RUN /uvx python install 3.11
-ENV PATH="/root/.uv/py/3.11/bin:${PATH}"
+COPY --from=uv /uv /bin/uv
+RUN /bin/uv python install 3.12.3
+#ENV PATH="/root/.uv/py/3.12/bin:${PATH}"
 
 WORKDIR /workspace
 COPY go.mod go.sum ./
@@ -56,7 +56,7 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-RUN uv venv --python /root/.uv/py/3.11/bin/python /jumpstarter
+RUN uv venv /jumpstarter
 COPY --from=builder /src/dist/*.whl /tmp/
 RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
 ENV PATH="/jumpstarter/bin:${PATH}"
