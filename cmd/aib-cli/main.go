@@ -107,10 +107,8 @@ func main() {
 	downloadCmd.Flags().StringVar(&outputDir, "output-dir", "./output", "directory to save artifacts")
 	downloadCmd.MarkFlagRequired("name")
 
-	// List command flags
 	listCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace to list ImageBuilds from")
 
-	// Show command flags
 	showCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace of the ImageBuild")
 
 	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd, showCmd)
@@ -168,7 +166,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Delete existing ImageBuild if it exists to ensure a fresh build
 	existingIB := &automotivev1.ImageBuild{}
 	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existingIB)
 	if err == nil {
@@ -207,8 +204,8 @@ func runBuild(cmd *cobra.Command, args []string) {
 			Mode:                   mode,
 			AutomativeOSBuildImage: osbuildImage,
 			StorageClass:           storageClass,
-			ServeArtifact:          true, // Enable artifact serving by default
-			ServeExpiryHours:       24,   // Set default expiry to 24 hours
+			ServeArtifact:          true,
+			ServeExpiryHours:       24,
 		},
 	}
 
@@ -220,14 +217,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 	configMapName := fmt.Sprintf("%s-manifest-config", imageBuild.Name)
 	imageBuild.Spec.ManifestConfigMap = configMapName
 
-	// First create the ImageBuild
 	fmt.Printf("Creating ImageBuild %s\n", imageBuild.Name)
 	if err := c.Create(ctx, imageBuild); err != nil {
 		fmt.Printf("Error creating ImageBuild: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Now that we have the ImageBuild with UID, create/update ConfigMap with owner reference
 	manifestData, err := os.ReadFile(manifest)
 	if err != nil {
 		fmt.Printf("Error reading manifest file: %v\n", err)
@@ -254,7 +249,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 		},
 	}
 
-	// Delete existing ConfigMap if it exists
 	existingCM := &corev1.ConfigMap{}
 	err = c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, existingCM)
 	if err == nil {
@@ -264,7 +258,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		// Wait for deletion to complete
 		fmt.Printf("Waiting for ConfigMap %s to be deleted...\n", configMapName)
 		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 			err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, &corev1.ConfigMap{})
@@ -279,7 +272,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create the ConfigMap with owner reference
 	fmt.Printf("Creating ConfigMap %s\n", configMapName)
 	if err := c.Create(ctx, configMap); err != nil {
 		fmt.Printf("Error creating ConfigMap: %v\n", err)

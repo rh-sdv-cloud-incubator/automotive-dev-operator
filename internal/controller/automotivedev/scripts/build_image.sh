@@ -37,8 +37,6 @@ else
   file_extension=".$(params.export-format)"
 fi
 
-# Create a cleaner output filename
-# Use distro and target without repeating the format in the name
 cleanName=$(params.distro)-$(params.target)
 exportFile=${cleanName}${file_extension}
 
