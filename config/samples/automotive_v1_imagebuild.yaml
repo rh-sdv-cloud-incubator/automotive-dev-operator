@@ -19,7 +19,7 @@ spec:
   #storageClass: "lvms-vg1"  # use cluster default if not specified
   automativeOSBuildImage: "quay.io/centos-sig-automotive/automotive-osbuild:latest"
   manifestConfigMap: mpp
-  serveArtifact: true
+  serveArtifact: false
   serveExpiryHours: 24
 # publishers:
 #     registry:

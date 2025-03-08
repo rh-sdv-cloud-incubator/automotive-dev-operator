@@ -597,6 +597,10 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 							Name:      "run-dir",
 							MountPath: "/run/osbuild",
 						},
+						{
+							Name:      "dev",
+							MountPath: "/dev",
+						},
 					},
 				},
 			},
@@ -617,6 +621,14 @@ func generateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 					Name: "run-dir",
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "dev",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/dev",
+						},
 					},
 				},
 			},

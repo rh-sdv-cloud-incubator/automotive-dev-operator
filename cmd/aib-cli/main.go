@@ -204,7 +204,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			Mode:                   mode,
 			AutomativeOSBuildImage: osbuildImage,
 			StorageClass:           storageClass,
-			ServeArtifact:          autoDownload,
+			ServeArtifact:          false, // TODO change later
 			ServeExpiryHours:       24,
 		},
 	}
