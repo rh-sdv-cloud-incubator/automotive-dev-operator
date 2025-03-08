@@ -14,6 +14,55 @@ variables:
   VERSION: "${CI_COMMIT_SHORT_SHA}"
   AIB_CLI_BINARY: "aib-cli"
 
+.docker-setup: &docker-setup
+  before_script:
+    - mkdir -p ~/.docker/cli-plugins
+    - wget -O ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${ARCH}
+    - chmod +x ~/.docker/cli-plugins/docker-buildx
+    - docker buildx create --name multiarch-builder --driver docker-container --use
+    - docker buildx inspect --bootstrap
+    - echo "${REGISTRY_PASSWORD}" | docker login ${REGISTRY} -u "${REGISTRY_USER}" --password-stdin
+
+build-operator-arm64:
+  tags:
+    - saas-linux-small-arm64
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  variables:
+    ARCH: arm64
+  <<: *docker-setup
+  script:
+    - docker buildx build --platform linux/arm64
+      --push
+      -f Dockerfile
+      -t "${OPERATOR_IMAGE}:${VERSION}-arm64"
+      -t "${OPERATOR_IMAGE}:latest-arm64" .
+  only:
+    - main
+    - tags
+
+build-aib-base-arm64:
+  tags:
+    - saas-linux-small-arm64
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  variables:
+    ARCH: arm64
+  <<: *docker-setup
+  script:
+    - docker buildx build --platform linux/arm64
+      --push
+      -f Dockerfile.aib-cli
+      -t "${AIB_BASE_IMAGE}:${VERSION}-arm64"
+      -t "${AIB_BASE_IMAGE}:latest-arm64" .
+  only:
+    - main
+    - tags
+
 build-aib-cli:
   tags:
     - saas-linux-small-arm64
