@@ -50,4 +50,5 @@ create-release:
           url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/${AIB_CLI_BINARY}-${VERSION}-arm64?job=build-aib-cli"
           link_type: "package"
   only:
+    - main
     - tags
