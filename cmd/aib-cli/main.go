@@ -98,9 +98,9 @@ func main() {
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
 	buildCmd.Flags().StringVar(&osbuildImage, "osbuild-image", "quay.io/centos-sig-automotive/automotive-osbuild:latest", "automotive osbuild image")
 	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
-	buildCmd.Flags().BoolVar(&waitForBuild, "wait", true, "wait for the build to complete")
+	buildCmd.Flags().BoolVar(&waitForBuild, "wait", false, "wait for the build to complete")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
-	buildCmd.Flags().BoolVar(&autoDownload, "auto-download", true, "automatically download artifacts when build completes")
+	buildCmd.Flags().BoolVar(&autoDownload, "auto-download", false, "automatically download artifacts when build completes")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
