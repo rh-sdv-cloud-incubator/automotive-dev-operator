@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,9 +59,14 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("AutomotiveDev fetched successfully", "name", av.Name)
 
-	// Create Tasks in the designated namespace FIRST
 	tasks := generateTektonTasks(TektonResourcesNamespace)
 	for _, task := range tasks {
+		task.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = av.Name
+
+		if err := controllerutil.SetControllerReference(av, task, r.Scheme); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
+		}
+
 		if err := r.createOrUpdateTask(ctx, task); err != nil {
 			log.Error(err, "Failed to create/update Task", "task", task.Name)
 			return ctrl.Result{}, err
@@ -70,6 +76,13 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	pipeline := generateTektonPipeline("automotive-build-pipeline", TektonResourcesNamespace)
+
+	pipeline.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = av.Name
+
+	if err := controllerutil.SetControllerReference(av, pipeline, r.Scheme); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
+	}
+
 	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
 		log.Error(err, "Failed to create/update Pipeline")
 		return ctrl.Result{}, err

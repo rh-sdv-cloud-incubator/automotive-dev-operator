@@ -229,7 +229,6 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 		)
 	}
 
-	// Create the workspace PVC if it doesn't exist
 	storageSize := resource.MustParse("8Gi")
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -238,6 +237,16 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "automotive-dev-operator",
 				"imagebuild-name":              imageBuild.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: imageBuild.APIVersion,
+					Kind:       imageBuild.Kind,
+					Name:       imageBuild.Name,
+					UID:        imageBuild.UID,
+					Controller: ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -429,6 +438,7 @@ func (r *ImageBuildReconciler) createArtifactServingPod(ctx context.Context, ima
 					Name:       imageBuild.Name,
 					UID:        imageBuild.UID,
 					Controller: ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
 				},
 			},
 		},
