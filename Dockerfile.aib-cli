@@ -22,6 +22,12 @@ RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-rhel-9-${TARGETARCH}-rpms || true && \
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || true
 
+# Install SCL repository to get Python 3.11
+RUN dnf install -y https://repo.almalinux.org/almalinux/9/plus/${TARGETARCH}/Packages/a/almalinux-release-plus-9-1.el9.noarch.rpm && \
+    dnf install -y 'dnf-command(config-manager)' && \
+    dnf config-manager --set-enabled almalinux-plus-9 && \
+    dnf install -y python3.11 python3.11-devel
+
 RUN dnf install -y --allowerasing \
     gcc \
     gcc-c++ \
@@ -39,11 +45,10 @@ RUN dnf install -y --allowerasing \
     libmnl-devel \
     llvm \
     perl-devel \
-    python3-devel \
-    python3-docutils \
-    python3 \
-    ustreamer \
-    libusb1 && \
+    python3-docutils && \
+    dnf clean all
+
+RUN dnf install -y libusb || dnf install -y libusb1 || true && \
     dnf clean all
 
 COPY --from=uv /uv /uvx /bin/
@@ -59,7 +64,8 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
 
-RUN uv venv /jumpstarter
+# Use uv with Python 3.11
+RUN uv venv --python python3.11 /jumpstarter
 COPY --from=builder /src/dist/*.whl /tmp/
 RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
 ENV PATH="/jumpstarter/bin:${PATH}"
