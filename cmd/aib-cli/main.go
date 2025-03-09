@@ -282,19 +282,10 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	if waitForBuild {
 		fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)
-		var completeBuild *automotivev1.ImageBuild
-		if completeBuild, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
+		//var completeBuild *automotivev1.ImageBuild
+		if _, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
 			fmt.Printf("Error waiting for build: %v\n", err)
 			os.Exit(1)
-		}
-
-		if autoDownload {
-			if completeBuild.Status.Phase == "Completed" {
-				fmt.Printf("Build completed successfully. Starting artifact download...\n")
-				downloadArtifacts(completeBuild)
-			} else {
-				fmt.Printf("Build did not complete successfully. Skipping download.\n")
-			}
 		}
 	}
 }
