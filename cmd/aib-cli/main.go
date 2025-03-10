@@ -43,8 +43,8 @@ var (
 	osbuildImage  string
 	storageClass  string
 	outputDir     string
-	waitForBuild  bool
 	timeout       int
+	waitForBuild  bool
 	autoDownload  bool
 )
 
@@ -102,9 +102,9 @@ func main() {
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
 	buildCmd.Flags().StringVar(&osbuildImage, "osbuild-image", "quay.io/centos-sig-automotive/automotive-osbuild:latest", "automotive osbuild image")
 	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
-	buildCmd.Flags().BoolVar(&waitForBuild, "wait", false, "wait for the build to complete")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
-	buildCmd.Flags().BoolVar(&autoDownload, "auto-download", false, "automatically download artifacts when build completes")
+	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
+	buildCmd.Flags().BoolVarP(&autoDownload, "auto-download", "d", false, "automatically download artifacts when build completes")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
@@ -208,7 +208,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			Mode:                   mode,
 			AutomativeOSBuildImage: osbuildImage,
 			StorageClass:           storageClass,
-			ServeArtifact:          autoDownload, // TODO change later
+			ServeArtifact:          waitForBuild && autoDownload,
 			ServeExpiryHours:       24,
 		},
 	}
@@ -394,7 +394,7 @@ func waitForBuildCompletion(c client.Client, name, namespace string, timeoutMinu
 		ctx,
 		10*time.Second,
 		time.Duration(timeoutMinutes)*time.Minute,
-		false, // immediate = false, start after first interval
+		false,
 		func(ctx context.Context) (bool, error) {
 			imageBuild := &automotivev1.ImageBuild{}
 			if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, imageBuild); err != nil {
@@ -405,6 +405,14 @@ func waitForBuildCompletion(c client.Client, name, namespace string, timeoutMinu
 			completedBuild = imageBuild
 
 			if imageBuild.Status.Phase == "Completed" {
+				if imageBuild.Spec.ServeArtifact {
+					// If we're serving artifacts, wait for URL
+					if imageBuild.Status.ArtifactURL != "" {
+						return true, nil
+					}
+					fmt.Println("Waiting for artifact URL to be available...")
+					return false, nil
+				}
 				return true, nil
 			}
 			if imageBuild.Status.Phase == "Failed" {
@@ -512,5 +520,9 @@ func runShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("  PVC Name:       %s\n", build.Status.PVCName)
 		fmt.Printf("  Artifact Path:  %s\n", build.Status.ArtifactPath)
 		fmt.Printf("  File Name:      %s\n", build.Status.ArtifactFileName)
+		if build.Status.ArtifactURL != "" {
+			fmt.Printf("  Download URL:    %s\n", build.Status.ArtifactURL)
+		}
 	}
+
 }

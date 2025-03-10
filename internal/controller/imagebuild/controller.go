@@ -397,7 +397,35 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 	if imageBuild.Spec.ServeArtifact {
 		if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
 			log.Error(err, "Failed to create artifact serving resources")
+			return err
 		}
+
+		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		route := &routev1.Route{}
+		err := wait.PollUntilContextTimeout(
+			timeoutCtx,
+			time.Second,
+			30*time.Second,
+			false, // immediate = false
+			func(ctx context.Context) (bool, error) {
+				if err := r.Get(ctx,
+					client.ObjectKey{
+						Name:      fmt.Sprintf("%s-artifacts", imageBuild.Name),
+						Namespace: imageBuild.Namespace,
+					}, route); err != nil {
+					return false, err
+				}
+				return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 &&
+					route.Status.Ingress[0].Host != "", nil
+			})
+
+		if err != nil {
+			return fmt.Errorf("failed to get route hostname: %w", err)
+		}
+
+		imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", route.Status.Ingress[0].Host)
 	}
 
 	return r.Status().Update(ctx, imageBuild)
