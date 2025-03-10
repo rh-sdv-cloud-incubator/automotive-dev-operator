@@ -318,6 +318,24 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	fmt.Printf("Downloading artifact from: %s\n", artifactURL)
 	fmt.Printf("Saving to: %s\n", outputPath)
 
+	// Wait for server to be ready before attempting download
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+
+	// Wait for server to be ready
+	fmt.Println("Waiting for artifact server to be ready...")
+	err := waitForServer(client, artifactURL)
+	if err != nil {
+		fmt.Printf("Error waiting for server: %v\n", err)
+		return
+	}
+
 	maxRetries := 5
 	for retry := range maxRetries {
 		if retry > 0 {
@@ -346,8 +364,26 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	}
 }
 
+func waitForServer(client *http.Client, url string) error {
+	maxAttempts := 30
+	interval := time.Second * 2
+
+	for i := range maxAttempts {
+		resp, err := client.Head(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+				return nil
+			}
+		}
+		if i < maxAttempts-1 {
+			time.Sleep(interval)
+		}
+	}
+	return fmt.Errorf("server not ready after %d attempts", maxAttempts)
+}
+
 func downloadFile(url string, filepath string) error {
-	// Create the file
 	out, err := os.Create(filepath)
 	if err != nil {
 		return err
@@ -373,13 +409,11 @@ func downloadFile(url string, filepath string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	// Create a progress bar
 	bar := progressbar.DefaultBytes(
 		resp.ContentLength,
 		"Downloading",
 	)
 
-	// Writer the body to file with progress bar
 	_, err = io.Copy(io.MultiWriter(out, bar), resp.Body)
 	return err
 }
@@ -389,6 +423,8 @@ func waitForBuildCompletion(c client.Client, name, namespace string, timeoutMinu
 	defer cancel()
 
 	var completedBuild *automotivev1.ImageBuild
+	var lastPhase, lastMessage string
+	var waitingForURL bool
 
 	err := wait.PollUntilContextTimeout(
 		ctx,
@@ -401,27 +437,49 @@ func waitForBuildCompletion(c client.Client, name, namespace string, timeoutMinu
 				return false, err
 			}
 
-			fmt.Printf("status: %s - %s\n", imageBuild.Status.Phase, imageBuild.Status.Message)
 			completedBuild = imageBuild
 
 			if imageBuild.Status.Phase == "Completed" {
 				if imageBuild.Spec.ServeArtifact {
-					// If we're serving artifacts, wait for URL
 					if imageBuild.Status.ArtifactURL != "" {
+						if !waitingForURL {
+							fmt.Printf("\nstatus: %s - %s\n", imageBuild.Status.Phase, imageBuild.Status.Message)
+						}
 						return true, nil
 					}
-					fmt.Println("Waiting for artifact URL to be available...")
+					if !waitingForURL {
+						fmt.Printf("\nstatus: %s - %s\n", imageBuild.Status.Phase, imageBuild.Status.Message)
+						fmt.Print("Waiting for artifact URL to be available...")
+						waitingForURL = true
+					} else {
+						fmt.Print(".")
+					}
 					return false, nil
+				}
+				if imageBuild.Status.Phase != lastPhase || imageBuild.Status.Message != lastMessage {
+					fmt.Printf("\nstatus: %s - %s\n", imageBuild.Status.Phase, imageBuild.Status.Message)
 				}
 				return true, nil
 			}
+
 			if imageBuild.Status.Phase == "Failed" {
+				fmt.Println()
 				return false, fmt.Errorf("build failed: %s", imageBuild.Status.Message)
+			}
+
+			// Only print full status if it changed
+			if imageBuild.Status.Phase != lastPhase || imageBuild.Status.Message != lastMessage {
+				fmt.Printf("\nstatus: %s - %s\n", imageBuild.Status.Phase, imageBuild.Status.Message)
+				lastPhase = imageBuild.Status.Phase
+				lastMessage = imageBuild.Status.Message
+			} else {
+				fmt.Print(".")
 			}
 
 			return false, nil
 		})
 
+	fmt.Println() // ensure we end with a newline
 	return completedBuild, err
 }
 
