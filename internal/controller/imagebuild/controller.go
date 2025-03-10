@@ -658,9 +658,12 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 
 	scheme := "https"
 	if route.Spec.TLS == nil {
+		// TODO debug log
+		r.Log.Info("TLS is not enabled")
 		scheme = "http"
 	}
 
+	r.Log.Info("Using scheme", "scheme", scheme)
 	imageBuild.Status.ArtifactURL = fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
 	if err := r.Status().Update(ctx, imageBuild); err != nil {
 		return fmt.Errorf("failed to update ImageBuild status: %w", err)
