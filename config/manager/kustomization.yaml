@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/bzlotnik/automotive-dev-operator
-  newTag: latest-arm64
+  newTag: latest

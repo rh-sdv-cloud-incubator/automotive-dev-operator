@@ -23,6 +23,7 @@ import (
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	routev1 "github.com/openshift/api/route/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,6 +56,8 @@ func init() {
 	utilruntime.Must(automotivev1.AddToScheme(scheme))
 	utilruntime.Must(securityv1.AddToScheme(scheme))
 	utilruntime.Must(tektonv1.AddToScheme(scheme))
+	utilruntime.Must(routev1.Install(scheme))
+
 	// +kubebuilder:scaffold:scheme
 }
 

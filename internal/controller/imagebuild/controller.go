@@ -640,24 +640,30 @@ server {
 		return fmt.Errorf("failed to create route: %w", err)
 	}
 
-	// Wait for the route to get its hostname
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	var hostname string
-	err := wait.PollImmediate(time.Second, time.Second*30, func() (bool, error) {
-		if err := r.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
-			return false, err
-		}
-		if route.Spec.Host != "" {
-			hostname = route.Spec.Host
-			return true, nil
-		}
-		return false, nil
-	})
+	err := wait.PollUntilContextTimeout(
+		timeoutCtx,
+		time.Second,
+		30*time.Second,
+		false,
+		func(ctx context.Context) (bool, error) {
+			if err := r.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
+				return false, err
+			}
+			if route.Spec.Host != "" {
+				hostname = route.Spec.Host
+				return true, nil
+			}
+			return false, nil
+		})
 
 	if err != nil {
 		return fmt.Errorf("failed to get route hostname: %w", err)
 	}
 
-	// Update the ImageBuild status with the route URL
 	imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", hostname)
 	if err := r.Status().Update(ctx, imageBuild); err != nil {
 		return fmt.Errorf("failed to update ImageBuild status: %w", err)
@@ -691,6 +697,7 @@ func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&automotivev1.ImageBuild{}).
 		Owns(&tektonv1.PipelineRun{}).
 		Owns(&corev1.Pod{}).
+		Owns(&routev1.Route{}).
 		Complete(r)
 }
 
