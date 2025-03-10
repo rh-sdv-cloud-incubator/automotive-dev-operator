@@ -655,7 +655,13 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		return fmt.Errorf("failed to get route hostname: %w", err)
 	}
 
-	imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", route.Status.Ingress[0].Host)
+
+	scheme := "https"
+	if route.Spec.TLS != nil {
+		scheme = "http"
+	}
+
+	imageBuild.Status.ArtifactURL = fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
 	if err := r.Status().Update(ctx, imageBuild); err != nil {
 		return fmt.Errorf("failed to update ImageBuild status: %w", err)
 	}
