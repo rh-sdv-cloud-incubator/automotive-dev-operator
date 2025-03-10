@@ -104,8 +104,8 @@ type ImageBuildStatus struct {
 	// ArtifactFileName is the name of the artifact file inside the PVC
 	ArtifactFileName string `json:"artifactFileName,omitempty"`
 
-	// RsyncCommand provides a sample command for downloading the artifact
-	RsyncCommand string `json:"rsyncCommand,omitempty"`
+	// ArtifactURL is the URL where the build artifacts can be accessed
+	ArtifactURL string `json:"artifactURL,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"crypto/tls"
+	"io"
+	"net/http"
+	"strings"
+
+	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -19,8 +23,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
@@ -204,7 +208,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			Mode:                   mode,
 			AutomativeOSBuildImage: osbuildImage,
 			StorageClass:           storageClass,
-			ServeArtifact:          false, // TODO change later
+			ServeArtifact:          autoDownload, // TODO change later
 			ServeExpiryHours:       24,
 		},
 	}
@@ -282,17 +286,21 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	if waitForBuild {
 		fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)
-		//var completeBuild *automotivev1.ImageBuild
-		if _, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
+		var completeBuild *automotivev1.ImageBuild
+		if completeBuild, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
 			fmt.Printf("Error waiting for build: %v\n", err)
 			os.Exit(1)
+		}
+
+		if autoDownload && completeBuild.Status.Phase == "Completed" {
+			downloadArtifacts(completeBuild)
 		}
 	}
 }
 
 func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
-	if imageBuild.Status.RsyncCommand == "" {
-		fmt.Println("No rsync command is available. Cannot download artifacts.")
+	if imageBuild.Status.ArtifactURL == "" {
+		fmt.Println("No artifact URL is available. Cannot download artifacts.")
 		return
 	}
 
@@ -301,44 +309,79 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 		return
 	}
 
-	rsyncCmd := strings.Replace(imageBuild.Status.RsyncCommand, "./output", outputDir, 1)
-	fmt.Printf("Downloading artifacts using: %s\n", rsyncCmd)
+	artifactURL := fmt.Sprintf("%s/%s",
+		strings.TrimSuffix(imageBuild.Status.ArtifactURL, "/"),
+		imageBuild.Status.ArtifactFileName)
+
+	outputPath := filepath.Join(outputDir, imageBuild.Status.ArtifactFileName)
+
+	fmt.Printf("Downloading artifact from: %s\n", artifactURL)
+	fmt.Printf("Saving to: %s\n", outputPath)
 
 	maxRetries := 5
-	for retry := range maxRetries {
+	for retry := 0; retry < maxRetries; retry++ {
 		if retry > 0 {
 			backoffTime := time.Duration(retry*2) * time.Second
 			fmt.Printf("Waiting %v before retry %d/%d...\n", backoffTime, retry+1, maxRetries)
 			time.Sleep(backoffTime)
 		}
 
-		execCmd := exec.Command("sh", "-c", rsyncCmd)
-		execCmd.Stdout = os.Stdout
-		execCmd.Stderr = os.Stderr
-
-		if err := execCmd.Run(); err != nil {
+		if err := downloadFile(artifactURL, outputPath); err != nil {
 			if retry < maxRetries-1 {
 				fmt.Printf("Attempt %d failed: %v. Will retry.\n", retry+1, err)
 				continue
 			}
-			fmt.Printf("Error executing rsync command after %d attempts: %v\n", maxRetries, err)
+			fmt.Printf("Error downloading file after %d attempts: %v\n", maxRetries, err)
 			return
 		}
 
-		fmt.Printf("Artifacts downloaded successfully to %s\n", outputDir)
+		fmt.Printf("Artifact downloaded successfully to %s\n", outputPath)
 
-		fmt.Printf("Downloaded %s (format: %s)\n",
-			imageBuild.Status.ArtifactFileName,
-			imageBuild.Spec.ExportFormat)
-
-		artifactPath := filepath.Join(outputDir, imageBuild.Status.ArtifactFileName)
-		if fileInfo, err := os.Stat(artifactPath); err == nil {
+		if fileInfo, err := os.Stat(outputPath); err == nil {
 			fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
 			fmt.Printf("File size: %.2f MB\n", fileSizeMB)
 		}
 
 		return
 	}
+}
+
+func downloadFile(url string, filepath string) error {
+	// Create the file
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	client := &http.Client{
+		Timeout: 30 * time.Minute,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // TODO change later
+			},
+		},
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	// Create a progress bar
+	bar := progressbar.DefaultBytes(
+		resp.ContentLength,
+		"Downloading",
+	)
+
+	// Writer the body to file with progress bar
+	_, err = io.Copy(io.MultiWriter(out, bar), resp.Body)
+	return err
 }
 
 func waitForBuildCompletion(c client.Client, name, namespace string, timeoutMinutes int) (*automotivev1.ImageBuild, error) {
@@ -469,10 +512,5 @@ func runShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("  PVC Name:       %s\n", build.Status.PVCName)
 		fmt.Printf("  Artifact Path:  %s\n", build.Status.ArtifactPath)
 		fmt.Printf("  File Name:      %s\n", build.Status.ArtifactFileName)
-
-		if build.Status.RsyncCommand != "" {
-			fmt.Printf("\nDownload Command:\n  %s\n", build.Status.RsyncCommand)
-			fmt.Printf("\nOr use: automotive-cli download --name %s --namespace %s\n", build.Name, build.Namespace)
-		}
 	}
 }

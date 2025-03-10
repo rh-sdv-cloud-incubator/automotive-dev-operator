@@ -111,6 +111,10 @@ spec:
                 description: ArtifactPath is the path inside the PVC where the artifact
                   is stored
                 type: string
+              artifactURL:
+                description: ArtifactURL is the URL where the build artifacts can
+                  be accessed
+                type: string
               completionTime:
                 description: CompletionTime is when the build finished
                 format: date-time
@@ -125,10 +129,6 @@ spec:
               pvcName:
                 description: PVCName is the name of the PVC where the artifact is
                   stored
-                type: string
-              rsyncCommand:
-                description: RsyncCommand provides a sample command for downloading
-                  the artifact
                 type: string
               startTime:
                 description: StartTime is when the build started
