@@ -8,9 +8,17 @@ rules:
   - ""
   resources:
   - configmaps
+  - persistentvolumeclaims
+  - pods
+  - serviceaccounts
+  - services
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -22,11 +30,9 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
+  - apps
   resources:
-  - persistentvolumeclaims
-  - pods
-  - serviceaccounts
+  - deployments
   verbs:
   - create
   - delete
@@ -85,6 +91,7 @@ rules:
   verbs:
   - create
   - delete
+  - deletecollection
   - get
   - list
   - patch
