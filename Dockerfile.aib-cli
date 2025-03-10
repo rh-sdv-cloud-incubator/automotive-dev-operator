@@ -22,6 +22,13 @@ RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-rhel-9-${TARGETARCH}-rpms || true && \
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || true
 
+RUN dnf install -y 'dnf-command(copr)'
+RUN dnf copr -y enable alexl/cs9-sample-images
+
+RUN dnf install -y --nogpgcheck vsomeip3 bash \
+    boost-system boost-thread boost-log boost-chrono boost-date-time boost-atomic \
+    boost-log boost-filesystem boost-regex auto-apps
+
 RUN dnf install -y --allowerasing \
     gcc \
     gcc-c++ \
