@@ -379,10 +379,9 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 		fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
 	}
 
-	fileName := fmt.Sprintf("%s-%s-%s%s",
+	fileName := fmt.Sprintf("%s-%s%s",
 		imageBuild.Spec.Distro,
 		imageBuild.Spec.Target,
-		imageBuild.Spec.ExportFormat,
 		fileExtension)
 
 	log.Info("Setting artifact info", "pvc", pvcName, "fileName", fileName)
@@ -480,7 +479,6 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		return fmt.Errorf("failed to create service: %w", err)
 	}
 
-	// Create the deployment
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifact-server", imageBuild.Name),
@@ -516,24 +514,65 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 					},
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:    ptr.To[int64](1000),
+						RunAsGroup:   ptr.To[int64](1000),
+						FSGroup:      ptr.To[int64](1000),
+						RunAsNonRoot: ptr.To(true),
+					},
 					Containers: []corev1.Container{
 						{
-							Name:  "nginx",
-							Image: "nginx:stable",
+							Name:  "httpserver",
+							Image: "quay.io/fedora/python-312",
+							Command: []string{
+								"python",
+								"-m",
+								"http.server",
+								"8080",
+								"--directory",
+								"/data",
+							},
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 8080,
 									Protocol:      corev1.ProtocolTCP,
 								},
 							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("100m"),
+									corev1.ResourceMemory: resource.MustParse("128Mi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("200m"),
+									corev1.ResourceMemory: resource.MustParse("256Mi"),
+								},
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/",
+										Port: intstr.FromInt(8080),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/",
+										Port: intstr.FromInt(8080),
+									},
+								},
+								InitialDelaySeconds: 15,
+								PeriodSeconds:       20,
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "artifacts",
-									MountPath: "/usr/share/nginx/html",
-								},
-								{
-									Name:      "nginx-config",
-									MountPath: "/etc/nginx/conf.d/",
+									MountPath: "/data",
+									ReadOnly:  true,
 								},
 							},
 						},
@@ -547,62 +586,16 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 								},
 							},
 						},
-						{
-							Name: "nginx-config",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: fmt.Sprintf("%s-nginx-config", imageBuild.Name),
-									},
-								},
-							},
-						},
 					},
 				},
 			},
 		},
 	}
 
-	// Create nginx config
-	nginxConfig := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-nginx-config", imageBuild.Name),
-			Namespace: imageBuild.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         imageBuild.APIVersion,
-					Kind:               imageBuild.Kind,
-					Name:               imageBuild.Name,
-					UID:                imageBuild.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
-				},
-			},
-		},
-		Data: map[string]string{
-			"default.conf": `
-server {
-    listen 8080;
-    server_name localhost;
-    location / {
-        root /usr/share/nginx/html;
-        autoindex on;
-        autoindex_exact_size off;
-        autoindex_localtime on;
-    }
-}`,
-		},
-	}
-
-	if err := r.Create(ctx, nginxConfig); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create nginx config: %w", err)
-	}
-
 	if err := r.Create(ctx, deployment); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create deployment: %w", err)
 	}
 
-	// Create the route
 	route := &routev1.Route{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifacts", imageBuild.Name),
@@ -640,36 +633,37 @@ server {
 		return fmt.Errorf("failed to create route: %w", err)
 	}
 
+	// Wait for the route to get its hostname
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	var hostname string
 	err := wait.PollUntilContextTimeout(
 		timeoutCtx,
 		time.Second,
 		30*time.Second,
 		false,
 		func(ctx context.Context) (bool, error) {
-			if err := r.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
+			if err := r.Get(ctx,
+				client.ObjectKey{
+					Name:      route.Name,
+					Namespace: route.Namespace,
+				}, route); err != nil {
 				return false, err
 			}
-			if route.Spec.Host != "" {
-				hostname = route.Spec.Host
-				return true, nil
-			}
-			return false, nil
+			return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 &&
+				route.Status.Ingress[0].Host != "", nil
 		})
 
 	if err != nil {
 		return fmt.Errorf("failed to get route hostname: %w", err)
 	}
 
-	imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", hostname)
+	imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", route.Status.Ingress[0].Host)
 	if err := r.Status().Update(ctx, imageBuild); err != nil {
 		return fmt.Errorf("failed to update ImageBuild status: %w", err)
 	}
 
-	log.Info("Created artifact serving resources", "route", hostname)
+	log.Info("Created artifact serving resources", "route", route.Status.Ingress[0].Host)
 	return nil
 }
 
