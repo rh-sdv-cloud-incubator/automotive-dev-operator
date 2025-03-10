@@ -421,7 +421,20 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			return fmt.Errorf("failed to get route hostname: %w", err)
 		}
 
-		imageBuild.Status.ArtifactURL = fmt.Sprintf("https://%s", route.Status.Ingress[0].Host)
+		scheme := "https"
+		if route.Spec.TLS == nil {
+			r.Log.Info("TLS is not enabled")
+			scheme = "http"
+		}
+
+		r.Log.Info("Using scheme", "scheme", scheme)
+		imageBuild.Status.ArtifactURL = fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
+		if err := r.Status().Update(ctx, imageBuild); err != nil {
+			return fmt.Errorf("failed to update ImageBuild status: %w", err)
+		}
+
+		log.Info("Created artifact serving resources", "route", route.Status.Ingress[0].Host)
+		return nil
 	}
 
 	return r.Status().Update(ctx, imageBuild)
@@ -450,7 +463,7 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifact-server", imageBuild.Name),
 			Namespace: imageBuild.Namespace,
-			Labels: commonLabels,
+			Labels:    commonLabels,
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
 			},
@@ -487,7 +500,7 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifact-server", imageBuild.Name),
 			Namespace: imageBuild.Namespace,
-			Labels: commonLabels,
+			Labels:    commonLabels,
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
 			},
@@ -598,8 +611,8 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 			Name:      fmt.Sprintf("%s-artifacts", imageBuild.Name),
 			Namespace: imageBuild.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "automotive-dev-operator",
-				"automotive.sdv.cloud.redhat.com/imagebuild-name":              imageBuild.Name,
+				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
+				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
 			},
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
@@ -654,7 +667,6 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 	if err != nil {
 		return fmt.Errorf("failed to get route hostname: %w", err)
 	}
-
 
 	scheme := "https"
 	if route.Spec.TLS == nil {

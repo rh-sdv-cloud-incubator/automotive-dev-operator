@@ -319,7 +319,7 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	fmt.Printf("Saving to: %s\n", outputPath)
 
 	maxRetries := 5
-	for retry := 0; retry < maxRetries; retry++ {
+	for retry := range maxRetries {
 		if retry > 0 {
 			backoffTime := time.Duration(retry*2) * time.Second
 			fmt.Printf("Waiting %v before retry %d/%d...\n", backoffTime, retry+1, maxRetries)
