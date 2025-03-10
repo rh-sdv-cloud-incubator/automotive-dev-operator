@@ -657,7 +657,7 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 
 
 	scheme := "https"
-	if route.Spec.TLS != nil {
+	if route.Spec.TLS == nil {
 		scheme = "http"
 	}
 
