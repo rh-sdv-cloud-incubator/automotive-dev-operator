@@ -437,16 +437,20 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		expiryHours = imageBuild.Spec.ServeExpiryHours
 	}
 
+	commonLabels := map[string]string{
+		"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
+		"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
+		"app.kubernetes.io/name":                          "artifact-server",
+		"app.kubernetes.io/component":                     "artifact-server",
+	}
+
 	expiryTime := metav1.Now().Add(time.Hour * time.Duration(expiryHours))
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifact-server", imageBuild.Name),
 			Namespace: imageBuild.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
-				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-			},
+			Labels: commonLabels,
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
 			},
@@ -483,10 +487,7 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-artifact-server", imageBuild.Name),
 			Namespace: imageBuild.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
-				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-			},
+			Labels: commonLabels,
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
 			},
@@ -503,15 +504,11 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-				},
+				MatchLabels: commonLabels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-					},
+					Labels: commonLabels,
 				},
 				Spec: corev1.PodSpec{
 					SecurityContext: &corev1.PodSecurityContext{
@@ -602,7 +599,7 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 			Namespace: imageBuild.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "automotive-dev-operator",
-				"imagebuild-name":              imageBuild.Name,
+				"automotive.sdv.cloud.redhat.com/imagebuild-name":              imageBuild.Name,
 			},
 			Annotations: map[string]string{
 				"automotive.sdv.cloud.redhat.com/expiry-time": expiryTime.Format(time.RFC3339),
