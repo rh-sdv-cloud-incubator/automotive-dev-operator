@@ -41,6 +41,7 @@ jobs:
           tags: |
             ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-arm64
             ${{ env.OPERATOR_IMAGE }}:latest-arm64
+            ${{ env.OPERATOR_IMAGE }}:latest
 
   build-aib-base:
     runs-on: ubuntu-24.04-arm
