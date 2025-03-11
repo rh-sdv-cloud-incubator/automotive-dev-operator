@@ -60,10 +60,12 @@ COPY internal/ internal/
 
 RUN go build -o /usr/local/bin/caib cmd/caib/main.go
 
+COPY jumpstarter_driver_ti-0.1.0-py3-none-any.whl /tmp/
 RUN uv venv /jumpstarter
 COPY --from=builder /src/dist/*.whl /tmp/
 RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
 ENV PATH="/jumpstarter/bin:${PATH}"
+
 
 RUN mkdir -p /home/user/.config/jumpstarter/clients
 RUN chown 10001:0 -R /home/user/{.config,.local,.cache} && chmod g+rwx -R /home/user/{.config,.local,.cache}
