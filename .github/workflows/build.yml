@@ -83,7 +83,7 @@ jobs:
       - name: Build CLI
         run: |
           mkdir -p ./bin
-          make build-cli
+          make build-caib
           cp bin/caib ${AIB_CLI_BINARY}-${VERSION}-arm64
 
       - name: Upload artifact
