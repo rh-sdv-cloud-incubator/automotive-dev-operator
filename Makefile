@@ -326,6 +326,6 @@ catalog-build: opm ## Build a catalog image.
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
 
-.PHONY: build-cli
-build-cli: ## Build the aib-cli tool
-	go build -o bin/aib-cli cmd/aib-cli/main.go
+.PHONY: build-caib
+build-caib: ## Build the caib tool
+	go build -o bin/caib cmd/caib/main.go

@@ -13,7 +13,7 @@ env:
   OPERATOR_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator
   AIB_BASE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/aib-base-dev
   VERSION: ${{ github.sha }}
-  AIB_CLI_BINARY: "aib-cli"
+  AIB_CLI_BINARY: "caib"
 
 jobs:
   build-operator:
@@ -62,7 +62,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.aib-cli
+          file: Dockerfile.caib
           platforms: linux/arm64
           push: true
           tags: |
@@ -70,7 +70,7 @@ jobs:
             ${{ env.AIB_BASE_IMAGE }}:latest-arm64
             ${{ env.AIB_BASE_IMAGE }}:latest
 
-  build-aib-cli:
+  build-caib:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -84,26 +84,26 @@ jobs:
         run: |
           mkdir -p ./bin
           make build-cli
-          cp bin/aib-cli ${AIB_CLI_BINARY}-${VERSION}-arm64
+          cp bin/caib ${AIB_CLI_BINARY}-${VERSION}-arm64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aib-cli
+          name: caib
           path: ${{ env.AIB_CLI_BINARY }}-${{ env.VERSION }}-arm64
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
 
   create-release:
-    needs: [build-aib-cli]
+    needs: [build-caib]
     runs-on: ubuntu-24.04-arm
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: aib-cli
+          name: caib
 
       - name: Create Release
         id: create_release

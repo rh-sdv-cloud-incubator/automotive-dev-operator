@@ -12,7 +12,7 @@ variables:
   OPERATOR_IMAGE: ${REGISTRY}/${REPOSITORY}/automotive-dev-operator
   AIB_BASE_IMAGE: ${REGISTRY}/${REPOSITORY}/aib-base-dev
   VERSION: "${CI_COMMIT_SHORT_SHA}"
-  AIB_CLI_BINARY: "aib-cli"
+  AIB_CLI_BINARY: "caib"
 
 .docker-setup: &docker-setup
   before_script:
@@ -56,15 +56,15 @@ build-aib-base-arm64:
   script:
     - docker buildx build --platform linux/arm64
       --push
-      -f Dockerfile.aib-cli
+      -f Dockerfile.caib
       -t "${AIB_BASE_IMAGE}:${VERSION}-arm64"
-      -t "${AIB_BASE_IMAGE}:latest-arm64" 
+      -t "${AIB_BASE_IMAGE}:latest-arm64"
       -t "${AIB_BASE_IMAGE}:latest" .
   only:
     - main
     - tags
 
-build-aib-cli:
+build-caib:
   tags:
     - saas-linux-small-arm64
   stage: build
@@ -72,8 +72,8 @@ build-aib-cli:
   script:
     - apk add --no-cache make git bash
     - mkdir -p ./bin
-    - make build-cli
-    - cp bin/aib-cli ${AIB_CLI_BINARY}-${VERSION}-arm64
+    - make caib
+    - cp bin/caib ${AIB_CLI_BINARY}-${VERSION}-arm64
   artifacts:
     paths:
       - ${AIB_CLI_BINARY}-${VERSION}-arm64
@@ -86,11 +86,11 @@ create-release:
   stage: release
   image: alpine:latest
   needs:
-    - build-aib-cli
+    - build-caib
   script:
     - apk add --no-cache curl
-    - 'curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file ${AIB_CLI_BINARY}-${VERSION}-arm64 "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"'
-    - echo "Package uploaded to ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
+    - 'curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file ${AIB_CLI_BINARY}-${VERSION}-arm64 "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/caib/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"'
+    - echo "Package uploaded to ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/caib/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
   artifacts:
     paths:
       - ${AIB_CLI_BINARY}-${VERSION}-arm64
@@ -102,7 +102,7 @@ create-release:
     assets:
       links:
         - name: "${AIB_CLI_BINARY}-arm64"
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/aib-cli/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/caib/${VERSION}/${AIB_CLI_BINARY}-${VERSION}-arm64"
           link_type: "package"
   only:
     - tags

@@ -22,9 +22,9 @@ RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-rhel-9-${TARGETARCH}-rpms || true && \
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || true
 
-RUN dnf install -y --nogpgcheck vsomeip3 bash \
-    boost-system boost-thread boost-log boost-chrono boost-date-time boost-atomic \
-    boost-log boost-filesystem boost-regex
+#RUN dnf install -y --nogpgcheck vsomeip3 bash \
+#    boost-system boost-thread boost-log boost-chrono boost-date-time boost-atomic \
+#    boost-log boost-filesystem boost-regex
 
 RUN dnf install -y --allowerasing \
     gcc \
@@ -54,11 +54,11 @@ RUN /bin/uv python install 3.12.3
 
 WORKDIR /workspace
 COPY go.mod go.sum ./
-COPY cmd/aib-cli cmd/aib-cli/
+COPY cmd/caib cmd/caib/
 COPY api/ api/
 COPY internal/ internal/
 
-RUN go build -o /usr/local/bin/aib-cli cmd/aib-cli/main.go
+RUN go build -o /usr/local/bin/caib cmd/caib/main.go
 
 RUN uv venv /jumpstarter
 COPY --from=builder /src/dist/*.whl /tmp/
