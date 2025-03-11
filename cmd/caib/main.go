@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	"k8s.io/client-go/rest"
 	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -123,38 +124,6 @@ func main() {
 	}
 }
 
-func getClient() (client.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %w", err)
-	}
-
-	scheme := runtime.NewScheme()
-	_ = automotivev1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-
-	c, err := client.New(config, client.Options{Scheme: scheme})
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes client: %w", err)
-	}
-
-	return c, nil
-}
-
-func getKubeClient() (*kubernetes.Clientset, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Kubernetes clientset: %w", err)
-	}
-
-	return clientset, nil
-}
-
 func runBuild(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 
@@ -165,6 +134,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 
 	// Create a new ImageBuild every time
+	// TODO this creates a race condition with the deletion of dependant resources
 	if buildName == "" {
 		fmt.Println("Error: --name flag is required")
 		os.Exit(1)
@@ -179,7 +149,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		// Wait for deletion to complete
 		fmt.Printf("Waiting for ImageBuild %s to be deleted...\n", buildName)
 		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 			err := c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, &automotivev1.ImageBuild{})
@@ -194,7 +163,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create the ImageBuild resource
 	imageBuild := &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildName,
@@ -583,4 +551,32 @@ func runShow(cmd *cobra.Command, args []string) {
 		}
 	}
 
+}
+
+func getClient() (client.Client, error) {
+    var config *rest.Config
+    var err error
+
+    config, err = rest.InClusterConfig()
+    if err != nil {
+        config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+        if err != nil {
+            return nil, fmt.Errorf("error building config: %w", err)
+        }
+    }
+
+    scheme := runtime.NewScheme()
+    if err := automotivev1.AddToScheme(scheme); err != nil {
+        return nil, fmt.Errorf("error adding automotive scheme: %w", err)
+    }
+    if err := corev1.AddToScheme(scheme); err != nil {
+        return nil, fmt.Errorf("error adding core scheme: %w", err)
+    }
+
+    c, err := client.New(config, client.Options{Scheme: scheme})
+    if err != nil {
+        return nil, fmt.Errorf("error creating Kubernetes client: %w", err)
+    }
+
+    return c, nil
 }
