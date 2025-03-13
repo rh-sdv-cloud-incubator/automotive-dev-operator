@@ -25,10 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
 
 var _ = Describe("ImageBuild Controller", func() {

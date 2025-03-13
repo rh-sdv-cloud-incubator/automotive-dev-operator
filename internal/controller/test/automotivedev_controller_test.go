@@ -21,14 +21,14 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
 
 var _ = Describe("AutomotiveDev Controller", func() {

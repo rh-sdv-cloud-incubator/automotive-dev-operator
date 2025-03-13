@@ -39,9 +39,9 @@ import (
 	securityv1 "github.com/openshift/api/security/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
-	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
-	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
-	"gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
+	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	// +kubebuilder:scaffold:imports
 )
 

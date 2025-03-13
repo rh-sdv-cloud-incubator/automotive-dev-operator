@@ -1,4 +1,4 @@
-module gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator
+module github.com/rh-sdv-cloud-incubator/automotive-dev-operator
 
 go 1.23.0
 

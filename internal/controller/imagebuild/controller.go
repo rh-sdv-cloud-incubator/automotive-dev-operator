@@ -7,9 +7,10 @@ import (
 
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
+	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/common/tasks"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-	automotivev1 "gitlab.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -119,16 +120,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
 	log.Info("Creating TaskRun for ImageBuild")
 
-	// Get the task template
-	buildTask := &tektonv1.Task{}
-	if err := r.Get(ctx, types.NamespacedName{
-		Name:      "build-automotive-image",
-		Namespace: OperatorNamespace,
-	}, buildTask); err != nil {
-		return fmt.Errorf("failed to get build task: %w", err)
-	}
+	buildTask := tasks.GenerateBuildAutomotiveImageTask(OperatorNamespace)
 
-	// Node affinity for architecture-specific builds
 	nodeAffinity := &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{
@@ -272,7 +265,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			// Use TaskSpec directly from the operator's task
 			TaskSpec:   &buildTask.Spec,
 			Params:     params,
 			Workspaces: workspaces,
@@ -285,6 +277,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 	}
 
 	if imageBuild.Spec.InputFilesPVC != "" {
+		// Add the volume to the pod template
 		taskRun.Spec.PodTemplate.Volumes = append(taskRun.Spec.PodTemplate.Volumes,
 			corev1.Volume{
 				Name: "local-files",
@@ -296,13 +289,23 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 			},
 		)
 
-		taskRun.Spec.StepSpecs = append(taskRun.Spec.StepSpecs,
-			tektonv1.TaskRunStepSpec{
-				Name: "build-image",
-				// Cannot directly specify VolumeMounts here
-				// Need to modify the TaskSpec instead
-			},
-		)
+		modifiedTaskSpec := buildTask.Spec.DeepCopy()
+
+		for step := range modifiedTaskSpec.Steps {
+			if modifiedTaskSpec.Steps[step].Name == "build-image" {
+				modifiedTaskSpec.Steps[step].VolumeMounts = append(
+					modifiedTaskSpec.Steps[step].VolumeMounts,
+					corev1.VolumeMount{
+						Name:      "local-files",
+						MountPath: "/",
+						ReadOnly:  true,
+					},
+				)
+				break
+			}
+		}
+
+		taskRun.Spec.TaskSpec = modifiedTaskSpec
 	}
 
 	if err := r.Create(ctx, taskRun); err != nil {
