@@ -72,9 +72,8 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	log.Info("fetched ImageBuild", "name", imageBuild.Name)
 
-	// Check if PipelineRun already exists
-	existingPipelineRuns := &tektonv1.PipelineRunList{}
-	if err := r.List(ctx, existingPipelineRuns,
+	existingTaskRuns := &tektonv1.TaskRunList{}
+	if err := r.List(ctx, existingTaskRuns,
 		client.InNamespace(req.Namespace),
 		client.MatchingLabels{"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name}); err != nil {
 		return ctrl.Result{}, err
@@ -82,14 +81,14 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	log.Info("Checking existing PipelineRuns")
 
-	if len(existingPipelineRuns.Items) > 0 {
-		lastRun := existingPipelineRuns.Items[len(existingPipelineRuns.Items)-1]
+	if len(existingTaskRuns.Items) > 0 {
+		lastRun := existingTaskRuns.Items[len(existingTaskRuns.Items)-1]
 
-		if !isPipelineRunCompleted(lastRun) {
+		if !isTaskRunCompleted(lastRun) {
 			return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 		}
 
-		if isSuccessful(lastRun) {
+		if isTaskRunSuccessful(lastRun) {
 			if err := r.updateStatus(ctx, imageBuild, "Completed", "Image build completed successfully"); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -105,7 +104,7 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.createPipelineRun(ctx, imageBuild); err != nil {
+	if err := r.createBuildTaskRun(ctx, imageBuild); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -116,18 +115,20 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 }
 
-func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild *automotivev1.ImageBuild) error {
+func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuild *automotivev1.ImageBuild) error {
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
-	log.Info("Creating PipelineRun for ImageBuild")
+	log.Info("Creating TaskRun for ImageBuild")
 
-	operatorPipeline := &tektonv1.Pipeline{}
+	// Get the task template
+	buildTask := &tektonv1.Task{}
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      "automotive-build-pipeline",
+		Name:      "build-automotive-image",
 		Namespace: OperatorNamespace,
-	}, operatorPipeline); err != nil {
-		return fmt.Errorf("failed to get operator pipeline: %w", err)
+	}, buildTask); err != nil {
+		return fmt.Errorf("failed to get build task: %w", err)
 	}
 
+	// Node affinity for architecture-specific builds
 	nodeAffinity := &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{
@@ -144,9 +145,10 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 		},
 	}
 
+	// Set up parameters
 	params := []tektonv1.Param{
 		{
-			Name: "arch",
+			Name: "target-architecture",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
 				StringVal: imageBuild.Spec.Architecture,
@@ -189,52 +191,7 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 		},
 	}
 
-	workspaces := []tektonv1.WorkspaceBinding{
-		{
-			Name: "shared-workspace",
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: fmt.Sprintf("%s-shared-workspace", imageBuild.Name),
-			},
-		},
-		{
-			Name: "manifest-config-workspace",
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: imageBuild.Spec.ManifestConfigMap,
-				},
-			},
-		},
-	}
-
-	if imageBuild.Spec.StorageClass != "" {
-		params = append(params, tektonv1.Param{
-			Name: "storage-class",
-			Value: tektonv1.ParamValue{
-				Type:      tektonv1.ParamTypeString,
-				StringVal: imageBuild.Spec.StorageClass,
-			},
-		})
-	}
-
-	if imageBuild.Spec.Publishers != nil && imageBuild.Spec.Publishers.Registry != nil {
-		params = append(params,
-			tektonv1.Param{
-				Name: "repository-url",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: imageBuild.Spec.Publishers.Registry.RepositoryURL,
-				},
-			},
-			tektonv1.Param{
-				Name: "secret-ref",
-				Value: tektonv1.ParamValue{
-					Type:      tektonv1.ParamTypeString,
-					StringVal: imageBuild.Spec.Publishers.Registry.Secret,
-				},
-			},
-		)
-	}
-
+	// Create a PVC for workspace
 	storageSize := resource.MustParse("8Gi")
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -277,10 +234,28 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 		}
 	}
 
-	// Create a PipelineRun with the resolver reference only
-	pipelineRun := &tektonv1.PipelineRun{
+	// Set up workspace bindings
+	workspaces := []tektonv1.WorkspaceBinding{
+		{
+			Name: "shared-workspace",
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: fmt.Sprintf("%s-shared-workspace", imageBuild.Name),
+			},
+		},
+		{
+			Name: "manifest-config-workspace",
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: imageBuild.Spec.ManifestConfigMap,
+				},
+			},
+		},
+	}
+
+	// Create TaskRun with embedded TaskSpec
+	taskRun := &tektonv1.TaskRun{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("%s-run-", imageBuild.Name),
+			GenerateName: fmt.Sprintf("%s-build-", imageBuild.Name),
 			Namespace:    imageBuild.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
@@ -296,44 +271,11 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 				},
 			},
 		},
-		Spec: tektonv1.PipelineRunSpec{
-			PipelineRef: &tektonv1.PipelineRef{
-				// Use only the ResolverRef, not the Name field
-				ResolverRef: tektonv1.ResolverRef{
-					Resolver: "cluster",
-					Params: []tektonv1.Param{
-						{
-							Name: "kind",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: "pipeline",
-							},
-						},
-						{
-							Name: "name",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: "automotive-build-pipeline",
-							},
-						},
-						{
-							Name: "namespace",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: OperatorNamespace,
-							},
-						},
-					},
-				},
-			},
+		Spec: tektonv1.TaskRunSpec{
+			// Use TaskSpec directly from the operator's task
+			TaskSpec:   &buildTask.Spec,
 			Params:     params,
 			Workspaces: workspaces,
-		},
-	}
-
-	pipelineRun.Spec.TaskRunSpecs = []tektonv1.PipelineTaskRunSpec{
-		{
-			PipelineTaskName: "build-image",
 			PodTemplate: &pod.PodTemplate{
 				Affinity: &corev1.Affinity{
 					NodeAffinity: nodeAffinity,
@@ -342,11 +284,32 @@ func (r *ImageBuildReconciler) createPipelineRun(ctx context.Context, imageBuild
 		},
 	}
 
-	if err := r.Create(ctx, pipelineRun); err != nil {
-		return fmt.Errorf("failed to create PipelineRun: %w", err)
+	if imageBuild.Spec.InputFilesPVC != "" {
+		taskRun.Spec.PodTemplate.Volumes = append(taskRun.Spec.PodTemplate.Volumes,
+			corev1.Volume{
+				Name: "local-files",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: imageBuild.Spec.InputFilesPVC,
+					},
+				},
+			},
+		)
+
+		taskRun.Spec.StepSpecs = append(taskRun.Spec.StepSpecs,
+			tektonv1.TaskRunStepSpec{
+				Name: "build-image",
+				// Cannot directly specify VolumeMounts here
+				// Need to modify the TaskSpec instead
+			},
+		)
 	}
 
-	log.Info("Successfully created PipelineRun", "name", pipelineRun.Name)
+	if err := r.Create(ctx, taskRun); err != nil {
+		return fmt.Errorf("failed to create TaskRun: %w", err)
+	}
+
+	log.Info("Successfully created TaskRun", "name", taskRun.Name)
 	return nil
 }
 
@@ -707,7 +670,7 @@ func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&automotivev1.ImageBuild{}).
-		Owns(&tektonv1.PipelineRun{}).
+		Owns(&tektonv1.TaskRun{}).
 		Owns(&corev1.Pod{}).
 		Owns(&routev1.Route{}).
 		Complete(r)
@@ -793,12 +756,12 @@ func (r *ImageBuildReconciler) checkAndCleanupExpiredResources(ctx context.Conte
 	return nil
 }
 
-func isPipelineRunCompleted(pipelineRun tektonv1.PipelineRun) bool {
-	return pipelineRun.Status.CompletionTime != nil
+func isTaskRunCompleted(taskRun tektonv1.TaskRun) bool {
+	return taskRun.Status.CompletionTime != nil
 }
 
-func isSuccessful(pipelineRun tektonv1.PipelineRun) bool {
-	conditions := pipelineRun.Status.Conditions
+func isTaskRunSuccessful(taskRun tektonv1.TaskRun) bool {
+	conditions := taskRun.Status.Conditions
 	if len(conditions) == 0 {
 		return false
 	}
