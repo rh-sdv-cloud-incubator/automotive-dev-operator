@@ -20,9 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // ImageBuildSpec defines the desired state of ImageBuild
 // +kubebuilder:printcolumn:name="StorageClass",type=string,JSONPath=`.spec.storageClass`
 type ImageBuildSpec struct {
@@ -110,8 +107,8 @@ type ImageBuildStatus struct {
 	// ArtifactFileName is the name of the artifact file inside the PVC
 	ArtifactFileName string `json:"artifactFileName,omitempty"`
 
-	// ArtifactURL is the URL where the build artifacts can be accessed
-	ArtifactURL string `json:"artifactURL,omitempty"`
+	// TaskRunName is the name of the active TaskRun for this build
+	TaskRunName string `json:"taskRunName,omitempty"`
 }
 
 // +kubebuilder:object:root=true

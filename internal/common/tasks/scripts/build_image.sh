@@ -8,8 +8,21 @@ runTmp="/run/osbuild/"
 mkdir -p "$storePath"
 mkdir -p "$runTmp"
 
+MANIFEST_FILE=$(cat /tekton/results/manifest-file-path)
+if [ -z "$MANIFEST_FILE" ]; then
+    echo "Error: No manifest file path provided"
+    exit 1
+fi
+
+echo "using manifest file: $MANIFEST_FILE"
+
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo "error: Manifest file not found at $MANIFEST_FILE"
+    exit 1
+fi
+
 if mountpoint -q "$osbuildPath"; then
-  exit 0
+    exit 0
 fi
 
 rootType="system_u:object_r:root_t:s0"
@@ -44,8 +57,6 @@ mode_param=""
 if [ -n "$(params.mode)" ]; then
   mode_param="--mode $(params.mode)"
 fi
-
-MANIFEST_FILE=$(cat /tekton/results/manifest-file-path)
 
 CUSTOM_DEFS=""
 CUSTOM_DEFS_FILE="$(workspaces.manifest-config-workspace.path)/custom-definitions.env"
@@ -82,6 +93,12 @@ build_command="automotive-image-builder --verbose \
   $mode_param \
   $MANIFEST_FILE \
   /output/${exportFile}"
+
+echo "contents of shared workspace before build:"
+ls -la $(workspaces.shared-workspace.path)/
+echo "contents of working manifest:"
+cat "$MANIFEST_FILE"
+
 
 echo "Running the build command: $build_command"
 $build_command
