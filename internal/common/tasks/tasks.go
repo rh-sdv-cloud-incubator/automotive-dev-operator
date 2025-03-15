@@ -141,6 +141,10 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 					Name:        "automotive-osbuild-image",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Automotive OSBuild container image to use",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "quay.io/centos-sig-automotive/automotive-osbuild:latest",
+					},
 				},
 			},
 			Results: []tektonv1.TaskResult{
@@ -164,8 +168,14 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 			Steps: []tektonv1.Step{
 				{
 					Name:   "find-manifest-file",
-					Image:  "quay.io/prometheus/busybox:latest",
+					Image:  "quay.io/konflux-ci/yq:latest",
 					Script: FindManifestScript,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "manifest-work",
+							MountPath: "/manifest-work",
+						},
+					},
 				},
 				{
 					Name:  "build-image",
@@ -197,10 +207,20 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 							Name:      "dev",
 							MountPath: "/dev",
 						},
+						{
+							Name:      "manifest-work",
+							MountPath: "/manifest-work",
+						},
 					},
 				},
 			},
 			Volumes: []corev1.Volume{
+				{
+					Name: "manifest-work",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
 				{
 					Name: "build-dir",
 					VolumeSource: corev1.VolumeSource{

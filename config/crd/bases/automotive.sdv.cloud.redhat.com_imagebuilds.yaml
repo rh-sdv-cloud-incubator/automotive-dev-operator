@@ -119,10 +119,6 @@ spec:
                 description: ArtifactPath is the path inside the PVC where the artifact
                   is stored
                 type: string
-              artifactURL:
-                description: ArtifactURL is the URL where the build artifacts can
-                  be accessed
-                type: string
               completionTime:
                 description: CompletionTime is when the build finished
                 format: date-time
@@ -141,6 +137,10 @@ spec:
               startTime:
                 description: StartTime is when the build started
                 format: date-time
+                type: string
+              taskRunName:
+                description: TaskRunName is the name of the active TaskRun for this
+                  build
                 type: string
             type: object
         type: object

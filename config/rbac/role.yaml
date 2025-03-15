@@ -11,7 +11,6 @@ rules:
   - persistentvolumeclaims
   - pods
   - serviceaccounts
-  - services
   verbs:
   - create
   - delete
@@ -28,18 +27,6 @@ rules:
   - create
   - get
   - list
-  - watch
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - automotive.sdv.cloud.redhat.com
@@ -79,19 +66,6 @@ rules:
   verbs:
   - create
   - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - route.openshift.io
-  resources:
-  - routes
-  verbs:
-  - create
-  - delete
-  - deletecollection
   - get
   - list
   - patch
