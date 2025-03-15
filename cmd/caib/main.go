@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,11 +59,6 @@ var (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
-
 	rootCmd := &cobra.Command{
 		Use:   "caib",
 		Short: "Cloud Automotive Image Builder",
@@ -229,7 +223,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	localFileRefs := findLocalFileReferences(string(manifestData))
+	localFileRefs, err := findLocalFileReferences(string(manifestData))
+	if err != nil {
+		fmt.Printf("Error in manifest file references: %v\n", err)
+		os.Exit(1)
+	}
+
 	hasLocalFiles := len(localFileRefs) > 0
 
 	imageBuild := &automotivev1.ImageBuild{
@@ -283,9 +282,8 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 
 	if hasLocalFiles {
-		localFileRefs := findLocalFileReferences(string(manifestData))
-		if len(localFileRefs) > 0 {
-			uploadPod, err := waitForUploadPod(ctx, c, namespace, imageBuild.Name)
+        if len(localFileRefs) > 0 {
+            uploadPod, err := waitForUploadPod(ctx, c, namespace, imageBuild.Name)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				os.Exit(1)
@@ -323,21 +321,50 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 }
 
-func findLocalFileReferences(manifestContent string) []map[string]string {
+func findLocalFileReferences(manifestContent string) ([]map[string]string, error) {
 	var manifestData map[string]any
 	var localFiles []map[string]string
 
 	if err := yaml.Unmarshal([]byte(manifestContent), &manifestData); err != nil {
-		fmt.Printf("failed to parse manifest YAML: %v\n", err)
-		return localFiles
+		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
 	}
 
-	processAddFiles := func(addFiles []any) {
+	isPathSafe := func(path string) error {
+		if path == "" || path == "/" {
+			return fmt.Errorf("empty or root path is not allowed")
+		}
+
+		if strings.Contains(path, "..") {
+			return fmt.Errorf("directory traversal detected in path: %s", path)
+		}
+
+		if filepath.IsAbs(path) {
+			// TODO add safe dirs flag
+			safeDirectories := []string{}
+			isInSafeDir := false
+			for _, dir := range safeDirectories {
+				if strings.HasPrefix(path, dir+"/") {
+					isInSafeDir = true
+					break
+				}
+			}
+			if !isInSafeDir {
+				return fmt.Errorf("absolute path outside safe directories: %s", path)
+			}
+		}
+
+		return nil
+	}
+
+	processAddFiles := func(addFiles []any) error {
 		for _, file := range addFiles {
 			if fileMap, ok := file.(map[string]any); ok {
 				path, hasPath := fileMap["path"].(string)
 				sourcePath, hasSourcePath := fileMap["source_path"].(string)
-				if hasPath && hasSourcePath && sourcePath != "" && sourcePath != "/" {
+				if hasPath && hasSourcePath {
+					if err := isPathSafe(sourcePath); err != nil {
+						return err
+					}
 					localFiles = append(localFiles, map[string]string{
 						"path":        path,
 						"source_path": sourcePath,
@@ -345,23 +372,28 @@ func findLocalFileReferences(manifestContent string) []map[string]string {
 				}
 			}
 		}
+		return nil
 	}
 
 	if content, ok := manifestData["content"].(map[string]any); ok {
 		if addFiles, ok := content["add_files"].([]any); ok {
-			processAddFiles(addFiles)
+			if err := processAddFiles(addFiles); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	if qm, ok := manifestData["qm"].(map[string]any); ok {
 		if qmContent, ok := qm["content"].(map[string]any); ok {
 			if addFiles, ok := qmContent["add_files"].([]any); ok {
-				processAddFiles(addFiles)
+				if err := processAddFiles(addFiles); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 
-	return localFiles
+	return localFiles, nil
 }
 
 func uploadLocalFiles(namespace string, files []map[string]string, uploadPod *corev1.Pod) error {
@@ -401,8 +433,11 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 	}
 
 	if toPod {
-		tarBuffer := new(bytes.Buffer)
-		tarWriter := tar.NewWriter(tarBuffer)
+		destDir := filepath.Dir(podPath)
+		mkdirCmd := []string{"mkdir", "-p", destDir}
+		if err := execInPod(config, namespace, podName, containerName, mkdirCmd); err != nil {
+			return fmt.Errorf("error creating destination directory: %w", err)
+		}
 
 		file, err := os.Open(localPath)
 		if err != nil {
@@ -415,35 +450,51 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 			return fmt.Errorf("error getting file stats: %w", err)
 		}
 
-		header := &tar.Header{
-			Name:    filepath.Base(podPath),
-			Size:    stat.Size(),
-			Mode:    int64(stat.Mode()),
-			ModTime: stat.ModTime(),
-		}
-
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return fmt.Errorf("error writing tar header: %w", err)
-		}
-
 		bar := progressbar.DefaultBytes(
 			stat.Size(),
 			"Uploading",
 		)
 
-		if _, err := io.Copy(io.MultiWriter(tarWriter, bar), file); err != nil {
-			return fmt.Errorf("error copying file data to tar: %w", err)
-		}
+		pipeReader, pipeWriter := io.Pipe()
 
-		if err := tarWriter.Close(); err != nil {
-			return fmt.Errorf("error closing tar writer: %w", err)
-		}
+		go func() {
+			tarWriter := tar.NewWriter(pipeWriter)
+			defer func() {
+				tarWriter.Close()
+				pipeWriter.Close()
+			}()
 
-		destDir := filepath.Dir(podPath)
-		mkdirCmd := []string{"mkdir", "-p", destDir}
-		if err := execInPod(config, namespace, podName, containerName, mkdirCmd); err != nil {
-			return fmt.Errorf("error creating destination directory: %w", err)
-		}
+			header := &tar.Header{
+				Name:    filepath.Base(podPath),
+				Size:    stat.Size(),
+				Mode:    int64(stat.Mode()),
+				ModTime: stat.ModTime(),
+			}
+
+			if err := tarWriter.WriteHeader(header); err != nil {
+				pipeWriter.CloseWithError(fmt.Errorf("error writing tar header: %w", err))
+				return
+			}
+
+			buf := make([]byte, 4*1024*1024) // 4MB chunks
+			for {
+				n, err := file.Read(buf)
+				if err != nil && err != io.EOF {
+					pipeWriter.CloseWithError(fmt.Errorf("error reading file: %w", err))
+					return
+				}
+				if n == 0 {
+					break
+				}
+
+				if _, err := tarWriter.Write(buf[:n]); err != nil {
+					pipeWriter.CloseWithError(fmt.Errorf("error writing to tar: %w", err))
+					return
+				}
+
+				bar.Add(n)
+			}
+		}()
 
 		req := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
@@ -465,7 +516,7 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 
 		var stdout, stderr bytes.Buffer
 		err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
-			Stdin:  bytes.NewReader(tarBuffer.Bytes()),
+			Stdin:  pipeReader,
 			Stdout: &stdout,
 			Stderr: &stderr,
 		})
