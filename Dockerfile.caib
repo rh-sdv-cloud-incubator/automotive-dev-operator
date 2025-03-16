@@ -8,7 +8,7 @@ COPY --from=uv /uv /uvx /bin/
 RUN git clone https://github.com/jumpstarter-dev/jumpstarter.git /src
 RUN make -C /src build
 
-FROM quay.io/devfile/base-developer-image:ubi9-latest
+FROM quay.io/devfile/universal-developer-image:ubi9-latest
 
 ARG TARGETARCH
 USER 0
@@ -61,10 +61,13 @@ COPY --from=builder /src/dist/*.whl /tmp/
 RUN VIRTUAL_ENV=/jumpstarter uv pip install /tmp/*.whl
 ENV PATH="/jumpstarter/bin:${PATH}"
 
+USER root
 
-RUN mkdir -p /home/user/.config/jumpstarter/clients
-RUN chown 10001:0 -R /home/user/{.config,.local,.cache} && chmod g+rwx -R /home/user/{.config,.local,.cache}
+RUN mkdir -p /home/user/.config/jumpstarter/clients /home/user/.local/bin /home/user/.config/containers/
+RUN chown -R 10001:0 /home/user && chmod g+rwx -R /home/user
 
 USER 10001
 ENV HOME=/home/user
 WORKDIR /projects
+ENTRYPOINT [ "/entrypoint.sh" ]
+CMD ["tail", "-f", "/dev/null"]
