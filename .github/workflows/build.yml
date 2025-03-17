@@ -45,33 +45,6 @@ jobs:
             ${{ env.OPERATOR_IMAGE }}:latest-arm64
             ${{ env.OPERATOR_IMAGE }}:latest
 
-  build-aib-base:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Quay.io
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Build and push AIB base
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.caib
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ${{ env.AIB_BASE_IMAGE }}:${{ env.VERSION }}-arm64
-            ${{ env.AIB_BASE_IMAGE }}:latest-arm64
-            ${{ env.AIB_BASE_IMAGE }}:latest
-
   build-caib:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -113,7 +86,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.AIB_CLI_BINARY }}-${{ env.VERSION }}-arm64
+          files: ${{ env.AIB_CLI_BINARY }}-${{ github.ref_name }}-arm64
           name: Release ${{ github.ref_name }}
           body: Automotive Image Builder CLI ${{ github.ref_name }}
           draft: false
