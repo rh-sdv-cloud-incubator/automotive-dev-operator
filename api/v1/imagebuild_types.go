@@ -65,11 +65,8 @@ type ImageBuildSpec struct {
 	// InputFilesServer indicates if there's a server for files referenced locally in the manifest
 	InputFilesServer bool `json:"inputFilesServer,omitempty"`
 
-	// RegistryConfigMap specifies the name of the ConfigMap containing registry configuration
-	RegistryConfigMap string `json:"registryConfigMap,omitempty"`
-
-	// RegistryAuth specifies the name of the secret containing registry credentials
-	RegistryAuth string `json:"registryAuth,omitempty"`
+	// InputFilesPVC is the name of the PVC containing uploaded local files
+	InputFilesPVC string `json:"inputFilesPVC,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing

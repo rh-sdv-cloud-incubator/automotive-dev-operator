@@ -1,26 +1,6 @@
 #!/bin/sh
 set -e
 
-if [ -d "/workspace/registry-config" ]; then
-  echo "Setting up registry configuration..."
-
-  if [ -f "/workspace/registry-config/registries.conf" ]; then
-    mkdir -p /etc/containers
-    cp /workspace/registry-config/registries.conf /etc/containers/registries.conf
-    echo "Applied registry configuration for insecure registries"
-
-    echo "Registry configuration:"
-    cat /etc/containers/registries.conf
-  fi
-
-  if [ -f "/workspace/registry-config/auth.json" ]; then
-    mkdir -p $HOME/.docker
-    cp /workspace/registry-config/auth.json $HOME/.docker/config.json
-    echo "Applied registry authentication configuration"
-  fi
-fi
-
-
 osbuildPath="/usr/bin/osbuild"
 storePath="/_build"
 runTmp="/run/osbuild/"

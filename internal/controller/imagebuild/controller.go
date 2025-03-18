@@ -243,17 +243,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 		},
 	}
 
-	if imageBuild.Spec.RegistryConfigMap != "" {
-		workspaces = append(workspaces, tektonv1.WorkspaceBinding{
-			Name: "registry-config",
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: imageBuild.Spec.RegistryConfigMap,
-				},
-			},
-		})
-	}
-
 	nodeAffinity := &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{

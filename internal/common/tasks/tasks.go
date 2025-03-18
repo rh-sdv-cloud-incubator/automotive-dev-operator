@@ -97,7 +97,7 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 
 // GenerateBuildAutomotiveImageTask creates a Tekton Task for building automotive images
 func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
-	task := &tektonv1.Task{
+	return &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
 			Kind:       "Task",
@@ -146,15 +146,6 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 						StringVal: "quay.io/centos-sig-automotive/automotive-osbuild:latest",
 					},
 				},
-				{
-					Name:        "registry-auth-secret",
-					Type:        tektonv1.ParamTypeString,
-					Description: "Name of the secret containing registry credentials",
-					Default: &tektonv1.ParamValue{
-						Type:      tektonv1.ParamTypeString,
-						StringVal: "",
-					},
-				},
 			},
 			Results: []tektonv1.TaskResult{
 				{
@@ -196,16 +187,6 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 						},
 						Capabilities: &corev1.Capabilities{
 							Add: []corev1.Capability{},
-						},
-					},
-					Env: []corev1.EnvVar{
-						{
-							Name:  "CONTAINERS_REGISTRIES_CONF",
-							Value: "/workspace/registry-config/registries.conf",
-						},
-						{
-							Name:  "REGISTRY_AUTH_FILE",
-							Value: "$(params.registry-auth-secret)",
 						},
 					},
 					Script: BuildImageScript,
@@ -266,41 +247,9 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 						},
 					},
 				},
-				{
-					Name: "registry-auth",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName: "$(params.registry-auth-secret)",
-							Optional:   ptr.To(true),
-						},
-					},
-				},
 			},
 		},
 	}
-
-	task.Spec.Workspaces = append(task.Spec.Workspaces, tektonv1.WorkspaceDeclaration{
-		Name:        "registry-config",
-		Description: "Registry configuration",
-		MountPath:   "/workspace/registry-config",
-		Optional:    true,
-	})
-
-	// TODO something better
-	for _, env := range task.Spec.Steps[0].Env {
-		if env.Name == "REGISTRY_AUTH_FILE" && env.Value != "" {
-			task.Spec.Steps[0].VolumeMounts = append(task.Spec.Steps[0].VolumeMounts,
-				corev1.VolumeMount{
-					Name:      "registry-auth",
-					MountPath: "/auth",
-					ReadOnly:  true,
-				},
-			)
-			break
-		}
-	}
-
-	return task
 }
 
 // GenerateTektonPipeline creates a Tekton Pipeline for automotive building process
