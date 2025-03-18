@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,22 +42,23 @@ import (
 )
 
 var (
-	kubeconfig    string
-	namespace     string
-	imageBuildCfg string
-	manifest      string
-	buildName     string
-	distro        string
-	target        string
-	architecture  string
-	exportFormat  string
-	mode          string
-	osbuildImage  string
-	storageClass  string
-	outputDir     string
-	timeout       int
-	waitForBuild  bool
-	download      bool
+	kubeconfig       string
+	namespace        string
+	imageBuildCfg    string
+	manifest         string
+	buildName        string
+	distro           string
+	target           string
+	architecture     string
+	exportFormat     string
+	mode             string
+	osbuildImage     string
+	storageClass     string
+	outputDir        string
+	timeout          int
+	waitForBuild     bool
+	download         bool
+	insecureRegistry string
 )
 
 func main() {
@@ -115,6 +118,7 @@ func main() {
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
+	buildCmd.Flags().StringVar(&insecureRegistry, "insecure-registry", "", "insecure registry URL to use (can be specified multiple times)")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
@@ -142,13 +146,70 @@ func runBuild(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	validateBuildFlags()
+
+	cleanupExistingBuild(ctx, c)
+
+	configMap, manifestData, err := createManifestConfigMap(ctx, c)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	localFileRefs, err := findLocalFileReferences(string(manifestData))
+	if err != nil {
+		fmt.Printf("Error in manifest file references: %v\n", err)
+		os.Exit(1)
+	}
+
+	var registryConfigMap *corev1.ConfigMap
+	if insecureRegistry != "" {
+		registryConfigMap, err = createRegistryResources(ctx, c)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	imageBuild, err := createImageBuild(ctx, c, configMap, registryConfigMap, len(localFileRefs) > 0)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := updateResourceOwners(ctx, c, imageBuild, configMap, registryConfigMap); err != nil {
+		fmt.Printf("Warning: Failed to update owner references: %v\n", err)
+	}
+
+	if len(localFileRefs) > 0 {
+		if err := handleFileUploads(ctx, c, imageBuild, localFileRefs); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
+
+	if waitForBuild {
+		handleBuildCompletion(c, imageBuild)
+	}
+}
+
+func validateBuildFlags() {
 	if buildName == "" {
 		fmt.Println("Error: --name flag is required")
 		os.Exit(1)
 	}
 
+	if manifest == "" {
+		fmt.Println("Error: --manifest is required")
+		os.Exit(1)
+	}
+}
+
+func cleanupExistingBuild(ctx context.Context, c client.Client) {
 	existingIB := &automotivev1.ImageBuild{}
-	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existingIB)
+	err := c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existingIB)
 	if err == nil {
 		fmt.Printf("Deleting existing ImageBuild %s\n", buildName)
 		if err := c.Delete(ctx, existingIB); err != nil {
@@ -165,20 +226,13 @@ func runBuild(cmd *cobra.Command, args []string) {
 			fmt.Printf("Error waiting for ImageBuild deletion: %v\n", err)
 			os.Exit(1)
 		}
-	} else if !errors.IsNotFound(err) {
-		fmt.Printf("Error checking for existing ImageBuild: %v\n", err)
-		os.Exit(1)
 	}
+}
 
-	if manifest == "" {
-		fmt.Println("Error: --manifest is required")
-		os.Exit(1)
-	}
-
+func createManifestConfigMap(ctx context.Context, c client.Client) (*corev1.ConfigMap, []byte, error) {
 	manifestData, err := os.ReadFile(manifest)
 	if err != nil {
-		fmt.Printf("Error reading manifest file: %v\n", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("error reading manifest file: %w", err)
 	}
 
 	configMapName := fmt.Sprintf("%s-manifest-config", buildName)
@@ -188,8 +242,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 	if err == nil {
 		fmt.Printf("Deleting existing ConfigMap %s\n", configMapName)
 		if err := c.Delete(ctx, existingCM); err != nil {
-			fmt.Printf("Error deleting ConfigMap: %v\n", err)
-			os.Exit(1)
+			return nil, nil, fmt.Errorf("error deleting ConfigMap: %w", err)
 		}
 
 		fmt.Printf("Waiting for ConfigMap %s to be deleted...\n", configMapName)
@@ -198,12 +251,8 @@ func runBuild(cmd *cobra.Command, args []string) {
 			return errors.IsNotFound(err), nil
 		})
 		if err != nil {
-			fmt.Printf("Error waiting for ConfigMap deletion: %v\n", err)
-			os.Exit(1)
+			return nil, nil, fmt.Errorf("error waiting for ConfigMap deletion: %w", err)
 		}
-	} else if !errors.IsNotFound(err) {
-		fmt.Printf("Error checking for existing ConfigMap: %v\n", err)
-		os.Exit(1)
 	}
 
 	fileName := filepath.Base(manifest)
@@ -219,18 +268,44 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Creating ConfigMap %s with manifest file %s\n", configMapName, fileName)
 	if err := c.Create(ctx, configMap); err != nil {
-		fmt.Printf("Error creating ConfigMap: %v\n", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("error creating ConfigMap: %w", err)
 	}
 
-	localFileRefs, err := findLocalFileReferences(string(manifestData))
-	if err != nil {
-		fmt.Printf("Error in manifest file references: %v\n", err)
-		os.Exit(1)
+	return configMap, manifestData, nil
+}
+
+func createRegistryResources(ctx context.Context, c client.Client) (*corev1.ConfigMap, error) {
+	registryConfigMapName := fmt.Sprintf("%s-registry-config", buildName)
+
+	registriesConf := fmt.Sprintf(`[[registry]]
+prefix = "%s"
+location = "%s"
+insecure = true
+`, insecureRegistry, insecureRegistry)
+
+	registryConfigMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      registryConfigMapName,
+			Namespace: namespace,
+		},
+		Data: map[string]string{
+			"registries.conf": registriesConf,
+		},
 	}
 
-	hasLocalFiles := len(localFileRefs) > 0
+	fmt.Printf("Creating registry ConfigMap %s for insecure registry access\n", registryConfigMapName)
+	if err := c.Create(ctx, registryConfigMap); err != nil {
+		return nil, fmt.Errorf("error creating registry ConfigMap: %w", err)
+	}
 
+	if err := createRegistryAuthSecret(ctx, c, namespace, buildName); err != nil {
+		return nil, fmt.Errorf("error creating registry auth secret: %w", err)
+	}
+
+	return registryConfigMap, nil
+}
+
+func createImageBuild(ctx context.Context, c client.Client, manifestConfigMap *corev1.ConfigMap, registryConfigMap *corev1.ConfigMap, hasLocalFiles bool) (*automotivev1.ImageBuild, error) {
 	imageBuild := &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildName,
@@ -246,78 +321,76 @@ func runBuild(cmd *cobra.Command, args []string) {
 			StorageClass:           storageClass,
 			ServeArtifact:          waitForBuild && download,
 			ServeExpiryHours:       24,
-			ManifestConfigMap:      configMapName,
+			ManifestConfigMap:      manifestConfigMap.Name,
 			InputFilesServer:       hasLocalFiles,
 		},
 	}
 
-	if download {
-		imageBuild.Spec.ServeArtifact = true
+	if registryConfigMap != nil {
+		imageBuild.Spec.RegistryConfigMap = registryConfigMap.Name
+		imageBuild.Spec.RegistryAuth = fmt.Sprintf("%s-registry-auth", buildName)
 	}
 
 	fmt.Printf("Creating ImageBuild %s\n", imageBuild.Name)
 	if err := c.Create(ctx, imageBuild); err != nil {
-		fmt.Printf("Error creating ImageBuild: %v\n", err)
+		return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+	}
+
+	return imageBuild, nil
+}
+
+func updateResourceOwners(ctx context.Context, c client.Client, imageBuild *automotivev1.ImageBuild, manifestConfigMap *corev1.ConfigMap, registryConfigMap *corev1.ConfigMap) error {
+	if err := setOwnerReference(ctx, c, imageBuild, manifestConfigMap); err != nil {
+		return fmt.Errorf("failed to update manifest ConfigMap owner: %w", err)
+	}
+
+	if registryConfigMap != nil {
+		if err := setOwnerReference(ctx, c, imageBuild, registryConfigMap); err != nil {
+			return fmt.Errorf("failed to update registry ConfigMap owner: %w", err)
+		}
+
+		secret := &corev1.Secret{}
+		secret.Name = fmt.Sprintf("%s-registry-auth", buildName)
+		secret.Namespace = namespace
+		if err := setOwnerReference(ctx, c, imageBuild, secret); err != nil {
+			return fmt.Errorf("failed to update registry auth secret owner: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func handleFileUploads(ctx context.Context, c client.Client, imageBuild *automotivev1.ImageBuild, fileRefs []map[string]string) error {
+	uploadPod, err := waitForUploadPod(ctx, c, namespace, imageBuild.Name)
+	if err != nil {
+		return fmt.Errorf("error waiting for upload pod: %w", err)
+	}
+
+	fmt.Println("Found local file references in manifest.")
+	fmt.Println("Uploading local files to artifact server...")
+
+	if err := uploadLocalFiles(namespace, fileRefs, uploadPod); err != nil {
+		return fmt.Errorf("error uploading files: %w", err)
+	}
+
+	fmt.Println("Files uploaded successfully.")
+	if err := markUploadsComplete(ctx, c, namespace, imageBuild.Name); err != nil {
+		return fmt.Errorf("error marking uploads as complete: %w", err)
+	}
+
+	return nil
+}
+
+func handleBuildCompletion(c client.Client, imageBuild *automotivev1.ImageBuild) {
+	fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)
+	completeBuild, err := waitForBuildCompletion(c, imageBuild.Name, namespace, timeout)
+	if err != nil {
+		fmt.Printf("Error waiting for build: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap); err != nil {
-		fmt.Printf("Error retrieving ConfigMap for owner update: %v\n", err)
-		os.Exit(1)
-	}
-
-	configMap.OwnerReferences = []metav1.OwnerReference{
-		{
-			APIVersion:         "automotive.sdv.cloud.redhat.com/v1",
-			Kind:               "ImageBuild",
-			Name:               imageBuild.Name,
-			UID:                imageBuild.UID,
-			Controller:         ptr.To(true),
-			BlockOwnerDeletion: ptr.To(true),
-		},
-	}
-
-	if err := c.Update(ctx, configMap); err != nil {
-		fmt.Printf("Warning: Failed to update ConfigMap with owner reference: %v\n", err)
-	}
-
-	if hasLocalFiles {
-        if len(localFileRefs) > 0 {
-            uploadPod, err := waitForUploadPod(ctx, c, namespace, imageBuild.Name)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Println("Found local file references in manifest.")
-			fmt.Println("Uploading local files to artifact server...")
-
-			if err := uploadLocalFiles(namespace, localFileRefs, uploadPod); err != nil {
-				fmt.Printf("Error uploading files: %v\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Println("Files uploaded successfully.")
-			if err := markUploadsComplete(ctx, c, namespace, imageBuild.Name); err != nil {
-				fmt.Printf("Error marking uploads as complete: %v\n", err)
-				os.Exit(1)
-			}
-		}
-	}
-
-	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
-
-	if waitForBuild {
-		fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)
-		var completeBuild *automotivev1.ImageBuild
-		if completeBuild, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
-			fmt.Printf("Error waiting for build: %v\n", err)
-			os.Exit(1)
-		}
-
-		if download && completeBuild.Status.Phase == "Completed" {
-			downloadArtifacts(completeBuild)
-		}
+	if download && completeBuild.Status.Phase == "Completed" {
+		downloadArtifacts(completeBuild)
 	}
 }
 
@@ -979,4 +1052,92 @@ func waitForUploadPod(ctx context.Context, c client.Client, namespace, buildName
 
 	fmt.Printf("\nUpload pod is ready: %s\n", uploadPod.Name)
 	return uploadPod, nil
+}
+func createRegistryAuthSecret(ctx context.Context, c client.Client, namespace, name string) error {
+	token := os.Getenv("KUBECONFIG")
+	if token == "" {
+		config, err := clientcmd.LoadFromFile(kubeconfig)
+		if err != nil {
+			return fmt.Errorf("failed to load kubeconfig: %w", err)
+		}
+
+		currentContext := config.CurrentContext
+		context := config.Contexts[currentContext]
+		if context == nil {
+			return fmt.Errorf("current context not found in kubeconfig")
+		}
+
+		// Get user from context
+		authInfo := config.AuthInfos[context.AuthInfo]
+		if authInfo == nil {
+			return fmt.Errorf("user not found in kubeconfig")
+		}
+
+		token = authInfo.Token
+	}
+
+	if token == "" {
+		return fmt.Errorf("no authentication token found")
+	}
+
+	secretName := fmt.Sprintf("%s-registry-auth", name)
+
+	dockerConfig := struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}{
+		Auths: map[string]struct {
+			Auth string `json:"auth"`
+		}{
+			"image-registry.openshift-image-registry.svc:5000": {
+				Auth: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("serviceaccount:%s", token))),
+			},
+		},
+	}
+
+	dockerConfigJSON, err := json.Marshal(dockerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create docker config: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			".dockerconfigjson": dockerConfigJSON,
+		},
+	}
+
+	if err := c.Create(ctx, secret); err != nil {
+		return fmt.Errorf("failed to create registry auth secret: %w", err)
+	}
+
+	return nil
+}
+
+func setOwnerReference(ctx context.Context, c client.Client, owner *automotivev1.ImageBuild, object client.Object) error {
+	if err := c.Get(ctx, types.NamespacedName{Name: object.GetName(), Namespace: object.GetNamespace()}, object); err != nil {
+		return fmt.Errorf("error retrieving object for owner update: %w", err)
+	}
+
+	object.SetOwnerReferences([]metav1.OwnerReference{
+		{
+			APIVersion:         "automotive.sdv.cloud.redhat.com/v1",
+			Kind:               "ImageBuild",
+			Name:               owner.Name,
+			UID:                owner.UID,
+			Controller:         ptr.To(true),
+			BlockOwnerDeletion: ptr.To(true),
+		},
+	})
+
+	if err := c.Update(ctx, object); err != nil {
+		return fmt.Errorf("failed to update object with owner reference: %w", err)
+	}
+
+	return nil
 }
