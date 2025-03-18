@@ -61,12 +61,6 @@ type ImageBuildSpec struct {
 
 	// ServeExpiryHours specifies how long to serve the artifact before cleanup (default: 24)
 	ServeExpiryHours int32 `json:"serveExpiryHours,omitempty"`
-
-	// InputFilesServer indicates if there's a server for files referenced locally in the manifest
-	InputFilesServer bool `json:"inputFilesServer,omitempty"`
-
-	// InputFilesPVC is the name of the PVC containing uploaded local files
-	InputFilesPVC string `json:"inputFilesPVC,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing
