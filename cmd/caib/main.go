@@ -134,107 +134,169 @@ func main() {
 }
 
 func runBuild(cmd *cobra.Command, args []string) {
-	ctx := context.Background()
+    ctx := context.Background()
 
+    c, err := initializeBuildClient()
+    if err != nil {
+        handleError(err)
+    }
+
+    if err := validateBuildRequirements(); err != nil {
+        handleError(err)
+    }
+
+    if err := cleanupExistingImageBuild(ctx, c, buildName, namespace); err != nil {
+        handleError(err)
+    }
+
+    configMapName, manifestData, err := setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
+    if err != nil {
+        handleError(err)
+    }
+
+    imageBuild, err := createImageBuild(ctx, c, buildName, namespace, configMapName, manifestData)
+    if err != nil {
+        handleError(err)
+    }
+
+    if err := handleLocalFileUploads(ctx, c, namespace, imageBuild, manifestData); err != nil {
+        handleError(err)
+    }
+
+    fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
+
+    if waitForBuild {
+        if err := handleBuildCompletion(c, imageBuild); err != nil {
+            handleError(err)
+        }
+    }
+}
+
+func initializeBuildClient() (client.Client, error) {
 	c, err := getClient()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to initialize client: %w", err)
 	}
+	return c, nil
+}
 
+func validateBuildRequirements() error {
 	if buildName == "" {
-		fmt.Println("Error: --name flag is required")
-		os.Exit(1)
+		return fmt.Errorf("--name flag is required")
 	}
-
-	existingIB := &automotivev1.ImageBuild{}
-	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existingIB)
-	if err == nil {
-		fmt.Printf("Deleting existing ImageBuild %s\n", buildName)
-		if err := c.Delete(ctx, existingIB); err != nil {
-			fmt.Printf("Error deleting existing ImageBuild: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("Waiting for ImageBuild %s to be deleted...\n", buildName)
-		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-			err := c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, &automotivev1.ImageBuild{})
-			return errors.IsNotFound(err), nil
-		})
-		if err != nil {
-			fmt.Printf("Error waiting for ImageBuild deletion: %v\n", err)
-			os.Exit(1)
-		}
-	} else if !errors.IsNotFound(err) {
-		fmt.Printf("Error checking for existing ImageBuild: %v\n", err)
-		os.Exit(1)
-	}
-
 	if manifest == "" {
-		fmt.Println("Error: --manifest is required")
-		os.Exit(1)
+		return fmt.Errorf("--manifest is required")
 	}
+	return nil
+}
 
-	manifestData, err := os.ReadFile(manifest)
-	if err != nil {
-		fmt.Printf("Error reading manifest file: %v\n", err)
-		os.Exit(1)
-	}
-
-	configMapName := fmt.Sprintf("%s-manifest-config", buildName)
-
-	existingCM := &corev1.ConfigMap{}
-	err = c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, existingCM)
+func cleanupExistingImageBuild(ctx context.Context, c client.Client, name, ns string) error {
+	existingIB := &automotivev1.ImageBuild{}
+	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, existingIB)
 	if err == nil {
-		fmt.Printf("Deleting existing ConfigMap %s\n", configMapName)
-		if err := c.Delete(ctx, existingCM); err != nil {
-			fmt.Printf("Error deleting ConfigMap: %v\n", err)
-			os.Exit(1)
+		fmt.Printf("Deleting existing ImageBuild %s\n", name)
+		if err := c.Delete(ctx, existingIB); err != nil {
+			return fmt.Errorf("error deleting existing ImageBuild: %w", err)
 		}
-
-		fmt.Printf("Waiting for ConfigMap %s to be deleted...\n", configMapName)
-		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-			err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, &corev1.ConfigMap{})
-			return errors.IsNotFound(err), nil
-		})
-		if err != nil {
-			fmt.Printf("Error waiting for ConfigMap deletion: %v\n", err)
-			os.Exit(1)
-		}
+		return waitForImageBuildDeletion(ctx, c, name, ns)
 	} else if !errors.IsNotFound(err) {
-		fmt.Printf("Error checking for existing ConfigMap: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error checking for existing ImageBuild: %w", err)
 	}
+	return nil
+}
 
-	fileName := filepath.Base(manifest)
+func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
+    localFileRefs, err := findLocalFileReferences(string(manifestData))
+    if err != nil {
+        return nil, fmt.Errorf("error in manifest file references: %w", err)
+    }
+
+    imageBuild := constructImageBuild(name, ns, configMapName, len(localFileRefs) > 0)
+    if err := c.Create(ctx, imageBuild); err != nil {
+        return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+    }
+
+    return imageBuild, updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild)
+}
+
+func handleLocalFileUploads(ctx context.Context, c client.Client, ns string, imageBuild *automotivev1.ImageBuild, manifestData []byte) error {
+    if !imageBuild.Spec.InputFilesServer {
+        return nil
+    }
+
+    localFileRefs, err := findLocalFileReferences(string(manifestData))
+    if err != nil {
+        return fmt.Errorf("error in manifest file references: %w", err)
+    }
+
+    if len(localFileRefs) > 0 {
+        return processFileUploads(ctx, c, ns, imageBuild.Name, localFileRefs)
+    }
+    return nil
+}
+
+func setupManifestConfigMap(ctx context.Context, c client.Client, name, ns, manifestPath string) (string, []byte, error) {
+    manifestData, err := os.ReadFile(manifestPath)
+    if err != nil {
+        return "", nil, fmt.Errorf("error reading manifest file: %w", err)
+    }
+
+    configMapName := fmt.Sprintf("%s-manifest-config", name)
+    if err := cleanupExistingConfigMap(ctx, c, configMapName, ns); err != nil {
+        return "", nil, err
+    }
+
+    err = createManifestConfigMap(ctx, c, configMapName, ns, manifestPath, manifestData)
+    return configMapName, manifestData, err
+}
+
+func waitForImageBuildDeletion(ctx context.Context, c client.Client, name, ns string) error {
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &automotivev1.ImageBuild{})
+		return errors.IsNotFound(err), nil
+	})
+}
+
+func cleanupExistingConfigMap(ctx context.Context, c client.Client, name, ns string) error {
+	existingCM := &corev1.ConfigMap{}
+	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, existingCM)
+	if err == nil {
+		fmt.Printf("Deleting existing ConfigMap %s\n", name)
+		if err := c.Delete(ctx, existingCM); err != nil {
+			return fmt.Errorf("error deleting ConfigMap: %w", err)
+		}
+
+		return wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &corev1.ConfigMap{})
+				return errors.IsNotFound(err), nil
+			})
+	} else if !errors.IsNotFound(err) {
+		return fmt.Errorf("error checking for existing ConfigMap: %w", err)
+	}
+	return nil
+}
+
+func createManifestConfigMap(ctx context.Context, c client.Client, name, ns, fileName string, manifestData []byte) error {
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      configMapName,
-			Namespace: namespace,
+			Name:      name,
+			Namespace: ns,
 		},
 		Data: map[string]string{
-			fileName: string(manifestData),
+			filepath.Base(fileName): string(manifestData),
 		},
 	}
 
-	fmt.Printf("Creating ConfigMap %s with manifest file %s\n", configMapName, fileName)
-	if err := c.Create(ctx, configMap); err != nil {
-		fmt.Printf("Error creating ConfigMap: %v\n", err)
-		os.Exit(1)
-	}
+	fmt.Printf("Creating ConfigMap %s with manifest file %s\n", name, fileName)
+	return c.Create(ctx, configMap)
+}
 
-	localFileRefs, err := findLocalFileReferences(string(manifestData))
-	if err != nil {
-		fmt.Printf("Error in manifest file references: %v\n", err)
-		os.Exit(1)
-	}
-
-	hasLocalFiles := len(localFileRefs) > 0
-
-	imageBuild := &automotivev1.ImageBuild{
+func constructImageBuild(name, ns, configMapName string, hasLocalFiles bool) *automotivev1.ImageBuild {
+	return &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildName,
-			Namespace: namespace,
+			Name:      name,
+			Namespace: ns,
 		},
 		Spec: automotivev1.ImageBuildSpec{
 			Distro:                 distro,
@@ -250,20 +312,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 			InputFilesServer:       hasLocalFiles,
 		},
 	}
+}
 
-	if download {
-		imageBuild.Spec.ServeArtifact = true
-	}
-
-	fmt.Printf("Creating ImageBuild %s\n", imageBuild.Name)
-	if err := c.Create(ctx, imageBuild); err != nil {
-		fmt.Printf("Error creating ImageBuild: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap); err != nil {
-		fmt.Printf("Error retrieving ConfigMap for owner update: %v\n", err)
-		os.Exit(1)
+func updateConfigMapOwnership(ctx context.Context, c client.Client, configMapName, ns string, imageBuild *automotivev1.ImageBuild) error {
+	configMap := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: ns}, configMap); err != nil {
+		return fmt.Errorf("error retrieving ConfigMap for owner update: %w", err)
 	}
 
 	configMap.OwnerReferences = []metav1.OwnerReference{
@@ -277,48 +331,45 @@ func runBuild(cmd *cobra.Command, args []string) {
 		},
 	}
 
-	if err := c.Update(ctx, configMap); err != nil {
-		fmt.Printf("Warning: Failed to update ConfigMap with owner reference: %v\n", err)
+	return c.Update(ctx, configMap)
+}
+
+func processFileUploads(ctx context.Context, c client.Client, ns, buildName string, localFileRefs []map[string]string) error {
+	uploadPod, err := waitForUploadPod(ctx, c, ns, buildName)
+	if err != nil {
+		return fmt.Errorf("error waiting for upload pod: %w", err)
 	}
 
-	if hasLocalFiles {
-        if len(localFileRefs) > 0 {
-            uploadPod, err := waitForUploadPod(ctx, c, namespace, imageBuild.Name)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				os.Exit(1)
-			}
+	fmt.Println("Found local file references in manifest.")
+	fmt.Println("Uploading local files to artifact server...")
 
-			fmt.Println("Found local file references in manifest.")
-			fmt.Println("Uploading local files to artifact server...")
-
-			if err := uploadLocalFiles(namespace, localFileRefs, uploadPod); err != nil {
-				fmt.Printf("Error uploading files: %v\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Println("Files uploaded successfully.")
-			if err := markUploadsComplete(ctx, c, namespace, imageBuild.Name); err != nil {
-				fmt.Printf("Error marking uploads as complete: %v\n", err)
-				os.Exit(1)
-			}
-		}
+	if err := uploadLocalFiles(ns, localFileRefs, uploadPod); err != nil {
+		return fmt.Errorf("error uploading files: %w", err)
 	}
 
-	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
+	fmt.Println("Files uploaded successfully.")
+	return markUploadsComplete(ctx, c, ns, buildName)
+}
 
-	if waitForBuild {
-		fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n", imageBuild.Name, timeout)
-		var completeBuild *automotivev1.ImageBuild
-		if completeBuild, err = waitForBuildCompletion(c, imageBuild.Name, namespace, timeout); err != nil {
-			fmt.Printf("Error waiting for build: %v\n", err)
-			os.Exit(1)
-		}
+func handleBuildCompletion(c client.Client, imageBuild *automotivev1.ImageBuild) error {
+	fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n",
+		imageBuild.Name, timeout)
 
-		if download && completeBuild.Status.Phase == "Completed" {
-			downloadArtifacts(completeBuild)
-		}
+	completeBuild, err := waitForBuildCompletion(c, imageBuild.Name,
+		imageBuild.Namespace, timeout)
+	if err != nil {
+		return fmt.Errorf("error waiting for build: %w", err)
 	}
+
+	if download && completeBuild.Status.Phase == "Completed" {
+		downloadArtifacts(completeBuild)
+	}
+	return nil
+}
+
+func handleError(err error) {
+	fmt.Printf("Error: %v\n", err)
+	os.Exit(1)
 }
 
 func findLocalFileReferences(manifestContent string) ([]map[string]string, error) {
