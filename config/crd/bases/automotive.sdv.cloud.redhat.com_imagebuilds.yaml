@@ -53,10 +53,6 @@ spec:
               exportFormat:
                 description: ExportFormat specifies the output format (image, qcow2)
                 type: string
-              inputFilesPVC:
-                description: InputFilesPVC is the name of the PVC containing uploaded
-                  local files
-                type: string
               inputFilesServer:
                 description: InputFilesServer indicates if there's a server for files
                   referenced locally in the manifest

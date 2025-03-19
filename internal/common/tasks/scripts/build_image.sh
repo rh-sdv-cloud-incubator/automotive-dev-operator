@@ -1,6 +1,33 @@
 #!/bin/sh
 set -e
 
+
+# Make the internal registry trusted
+# TODO think about whether this is really the right approach
+mkdir -p /etc/containers
+cat > /etc/containers/registries.conf << EOF
+[registries.insecure]
+registries = ['image-registry.openshift-image-registry.svc:5000']
+EOF
+
+TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+REGISTRY="image-registry.openshift-image-registry.svc:5000"
+NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+mkdir -p $HOME/.config
+cat > $HOME/.authjson <<EOF
+{
+  "auths": {
+    "$REGISTRY": {
+      "auth": "$(echo -n "serviceaccount:$TOKEN" | base64 -w0)"
+    }
+  }
+}
+EOF
+
+export REGISTRY_AUTH_FILE=$HOME/.authjson
+export CONTAINERS_REGISTRIES_CONF="/etc/containers/registries.conf"
+
 osbuildPath="/usr/bin/osbuild"
 storePath="/_build"
 runTmp="/run/osbuild/"
