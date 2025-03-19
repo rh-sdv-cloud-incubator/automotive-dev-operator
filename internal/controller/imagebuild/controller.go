@@ -108,9 +108,35 @@ func (r *ImageBuildReconciler) handleUploadingState(ctx context.Context, imageBu
 }
 
 func (r *ImageBuildReconciler) handleBuildingState(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {
+	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
+
 	if imageBuild.Status.TaskRunName != "" {
 		return r.checkBuildProgress(ctx, imageBuild)
 	}
+
+	taskRunList := &tektonv1.TaskRunList{}
+	if err := r.List(ctx, taskRunList,
+		client.InNamespace(imageBuild.Namespace),
+		client.MatchingLabels{
+			"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
+		}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list existing task runs: %w", err)
+	}
+
+	for _, tr := range taskRunList.Items {
+		if tr.DeletionTimestamp == nil {
+			log.Info("Found existing TaskRun for this ImageBuild", "taskRun", tr.Name)
+
+			imageBuild.Status.TaskRunName = tr.Name
+			if err := r.Status().Update(ctx, imageBuild); err != nil {
+				log.Error(err, "Failed to update ImageBuild with existing TaskRun name")
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+			}
+
+			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
+		}
+	}
+
 	return r.startNewBuild(ctx, imageBuild)
 }
 
