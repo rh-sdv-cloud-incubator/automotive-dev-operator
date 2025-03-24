@@ -56,6 +56,7 @@ var (
 	timeout       int
 	waitForBuild  bool
 	download      bool
+	customDefs    []string
 )
 
 func main() {
@@ -115,6 +116,7 @@ func main() {
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
+	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
@@ -151,6 +153,10 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	configMapName, manifestData, err := setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
 	if err != nil {
+		handleError(err)
+	}
+
+	if err := addCustomDefinitionsToConfigMap(ctx, c, configMapName, namespace, customDefs); err != nil {
 		handleError(err)
 	}
 
@@ -1098,4 +1104,35 @@ func waitForUploadPod(ctx context.Context, c client.Client, namespace, buildName
 
 	fmt.Printf("\nUpload pod is ready: %s\n", uploadPod.Name)
 	return uploadPod, nil
+}
+
+func addCustomDefinitionsToConfigMap(ctx context.Context, c client.Client, configMapName, ns string, defs []string) error {
+	if len(defs) == 0 {
+		return nil
+	}
+
+	for _, def := range defs {
+		if !strings.Contains(def, "=") {
+			return fmt.Errorf("invalid custom definition format (must be KEY=VALUE): %s", def)
+		}
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: ns}, cm); err != nil {
+		return fmt.Errorf("error getting ConfigMap for custom definitions: %w", err)
+	}
+
+	defsContent := strings.Join(defs, " ")
+	fmt.Printf("adding custom definitions to ConfigMap: %s\n", defsContent)
+
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data["custom-definitions.env"] = defsContent
+
+	if err := c.Update(ctx, cm); err != nil {
+		return fmt.Errorf("error updating ConfigMap with custom definitions: %w", err)
+	}
+
+	return nil
 }
