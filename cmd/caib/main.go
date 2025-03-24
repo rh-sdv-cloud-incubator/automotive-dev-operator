@@ -333,7 +333,6 @@ func updateConfigMapOwnership(ctx context.Context, c client.Client, configMapNam
 			Name:               imageBuild.Name,
 			UID:                imageBuild.UID,
 			Controller:         ptr.To(true),
-			BlockOwnerDeletion: ptr.To(true),
 		},
 	}
 
