@@ -143,7 +143,7 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 					Description: "Automotive OSBuild container image to use",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "quay.io/centos-sig-automotive/automotive-osbuild:latest",
+						StringVal: "quay.io/centos-sig-automotive/automotive-image-builder:latest",
 					},
 				},
 			},

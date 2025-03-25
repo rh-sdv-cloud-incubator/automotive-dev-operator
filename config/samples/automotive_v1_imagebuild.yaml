@@ -17,7 +17,7 @@ spec:
   mode: "image"
   exportFormat: "qcow2"
   #storageClass: "lvms-vg1"  # use cluster default if not specified
-  automativeOSBuildImage: "quay.io/centos-sig-automotive/automotive-osbuild:latest"
+  automativeOSBuildImage: "quay.io/centos-sig-automotive/automotive-image-builder:latest"
   manifestConfigMap: mpp
   serveArtifact: false
   serveExpiryHours: 24
