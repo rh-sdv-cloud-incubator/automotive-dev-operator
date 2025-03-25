@@ -23,7 +23,6 @@ import (
 	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -147,11 +146,13 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	if err := cleanupExistingImageBuild(ctx, c, buildName, namespace); err != nil {
-		handleError(err)
+	if buildName == "" {
+		buildName = "build"
 	}
 
-	configMapName, manifestData, err := setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
+	generatedName := buildName + "-"
+
+	configMapName, manifestData, err := setupManifestConfigMap(ctx, c, generatedName, namespace, manifest)
 	if err != nil {
 		handleError(err)
 	}
@@ -160,10 +161,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	imageBuild, err := createImageBuild(ctx, c, buildName, namespace, configMapName, manifestData)
+	imageBuild, err := createImageBuildWithGenerateName(ctx, c, generatedName, namespace, configMapName, manifestData)
 	if err != nil {
 		handleError(err)
 	}
+
+	buildName = imageBuild.Name
 
 	if err := handleLocalFileUploads(ctx, c, namespace, imageBuild, manifestData); err != nil {
 		handleError(err)
@@ -178,6 +181,53 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 }
 
+func createImageBuildWithGenerateName(ctx context.Context, c client.Client, namePrefix, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
+    localFileRefs, err := findLocalFileReferences(string(manifestData))
+    if err != nil {
+        return nil, fmt.Errorf("error in manifest file references: %w", err)
+    }
+
+    labels := map[string]string{
+        "app.kubernetes.io/managed-by": "caib",
+        "app.kubernetes.io/part-of":    "automotive-dev",
+        "app.kubernetes.io/created-by": "caib-cli",
+        "automotive.sdv.cloud.redhat.com/distro": distro,
+        "automotive.sdv.cloud.redhat.com/target": target,
+        "automotive.sdv.cloud.redhat.com/architecture": architecture,
+    }
+
+    imageBuild := &automotivev1.ImageBuild{
+        ObjectMeta: metav1.ObjectMeta{
+            GenerateName: namePrefix,
+            Namespace:    ns,
+            Labels:       labels,
+        },
+        Spec: automotivev1.ImageBuildSpec{
+            Distro:                 distro,
+            Target:                 target,
+            Architecture:           architecture,
+            ExportFormat:           exportFormat,
+            Mode:                   mode,
+            AutomativeOSBuildImage: osbuildImage,
+            StorageClass:           storageClass,
+            ServeArtifact:          waitForBuild && download,
+            ServeExpiryHours:       24,
+            ManifestConfigMap:      configMapName,
+            InputFilesServer:       len(localFileRefs) > 0,
+        },
+    }
+
+    if err := c.Create(ctx, imageBuild); err != nil {
+        return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+    }
+
+    if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
+        return nil, err
+    }
+
+    return imageBuild, nil
+}
+
 func initializeBuildClient() (client.Client, error) {
 	c, err := getClient()
 	if err != nil {
@@ -187,42 +237,10 @@ func initializeBuildClient() (client.Client, error) {
 }
 
 func validateBuildRequirements() error {
-	if buildName == "" {
-		return fmt.Errorf("--name flag is required")
-	}
 	if manifest == "" {
 		return fmt.Errorf("--manifest is required")
 	}
 	return nil
-}
-
-func cleanupExistingImageBuild(ctx context.Context, c client.Client, name, ns string) error {
-	existingIB := &automotivev1.ImageBuild{}
-	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, existingIB)
-	if err == nil {
-		fmt.Printf("Deleting existing ImageBuild %s\n", name)
-		if err := c.Delete(ctx, existingIB); err != nil {
-			return fmt.Errorf("error deleting existing ImageBuild: %w", err)
-		}
-		return waitForImageBuildDeletion(ctx, c, name, ns)
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("error checking for existing ImageBuild: %w", err)
-	}
-	return nil
-}
-
-func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
-	localFileRefs, err := findLocalFileReferences(string(manifestData))
-	if err != nil {
-		return nil, fmt.Errorf("error in manifest file references: %w", err)
-	}
-
-	imageBuild := constructImageBuild(name, ns, configMapName, len(localFileRefs) > 0)
-	if err := c.Create(ctx, imageBuild); err != nil {
-		return nil, fmt.Errorf("error creating ImageBuild: %w", err)
-	}
-
-	return imageBuild, updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild)
 }
 
 func handleLocalFileUploads(ctx context.Context, c client.Client, ns string, imageBuild *automotivev1.ImageBuild, manifestData []byte) error {
@@ -241,83 +259,38 @@ func handleLocalFileUploads(ctx context.Context, c client.Client, ns string, ima
 	return nil
 }
 
-func setupManifestConfigMap(ctx context.Context, c client.Client, name, ns, manifestPath string) (string, []byte, error) {
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", nil, fmt.Errorf("error reading manifest file: %w", err)
-	}
+func setupManifestConfigMap(ctx context.Context, c client.Client, namePrefix, ns, manifestPath string) (string, []byte, error) {
+    manifestData, err := os.ReadFile(manifestPath)
+    if err != nil {
+        return "", nil, fmt.Errorf("error reading manifest file: %w", err)
+    }
 
-	configMapName := fmt.Sprintf("%s-manifest-config", name)
-	if err := cleanupExistingConfigMap(ctx, c, configMapName, ns); err != nil {
-		return "", nil, err
-	}
+    configMapName := fmt.Sprintf("%s-manifest", namePrefix)
 
-	err = createManifestConfigMap(ctx, c, configMapName, ns, manifestPath, manifestData)
-	return configMapName, manifestData, err
-}
+    labels := map[string]string{
+        "app.kubernetes.io/managed-by": "caib",
+        "app.kubernetes.io/part-of":    "automotive-dev",
+        "app.kubernetes.io/created-by": "caib-cli",
+        "automotive.sdv.cloud.redhat.com/resource-type": "manifest-config",
+    }
 
-func waitForImageBuildDeletion(ctx context.Context, c client.Client, name, ns string) error {
-	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &automotivev1.ImageBuild{})
-		return errors.IsNotFound(err), nil
-	})
-}
+    configMap := &corev1.ConfigMap{
+        ObjectMeta: metav1.ObjectMeta{
+            GenerateName: configMapName,
+            Namespace:    ns,
+            Labels:       labels,
+        },
+        Data: map[string]string{
+            filepath.Base(manifestPath): string(manifestData),
+        },
+    }
 
-func cleanupExistingConfigMap(ctx context.Context, c client.Client, name, ns string) error {
-	existingCM := &corev1.ConfigMap{}
-	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, existingCM)
-	if err == nil {
-		fmt.Printf("Deleting existing ConfigMap %s\n", name)
-		if err := c.Delete(ctx, existingCM); err != nil {
-			return fmt.Errorf("error deleting ConfigMap: %w", err)
-		}
+    fmt.Printf("Creating ConfigMap with manifest file %s\n", manifestPath)
+    if err := c.Create(ctx, configMap); err != nil {
+        return "", nil, fmt.Errorf("error creating ConfigMap: %w", err)
+    }
 
-		return wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &corev1.ConfigMap{})
-				return errors.IsNotFound(err), nil
-			})
-	} else if !errors.IsNotFound(err) {
-		return fmt.Errorf("error checking for existing ConfigMap: %w", err)
-	}
-	return nil
-}
-
-func createManifestConfigMap(ctx context.Context, c client.Client, name, ns, fileName string, manifestData []byte) error {
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
-		Data: map[string]string{
-			filepath.Base(fileName): string(manifestData),
-		},
-	}
-
-	fmt.Printf("Creating ConfigMap %s with manifest file %s\n", name, fileName)
-	return c.Create(ctx, configMap)
-}
-
-func constructImageBuild(name, ns, configMapName string, hasLocalFiles bool) *automotivev1.ImageBuild {
-	return &automotivev1.ImageBuild{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
-		Spec: automotivev1.ImageBuildSpec{
-			Distro:                 distro,
-			Target:                 target,
-			Architecture:           architecture,
-			ExportFormat:           exportFormat,
-			Mode:                   mode,
-			AutomativeOSBuildImage: osbuildImage,
-			StorageClass:           storageClass,
-			ServeArtifact:          waitForBuild && download,
-			ServeExpiryHours:       24,
-			ManifestConfigMap:      configMapName,
-			InputFilesServer:       hasLocalFiles,
-		},
-	}
+    return configMap.Name, manifestData, nil
 }
 
 func updateConfigMapOwnership(ctx context.Context, c client.Client, configMapName, ns string, imageBuild *automotivev1.ImageBuild) error {
