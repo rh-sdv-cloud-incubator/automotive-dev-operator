@@ -18,7 +18,7 @@ env:
   AIB_CLI_BINARY: "caib"
 
 jobs:
-  build-operator:
+  build-operator-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Build and push operator
+      - name: Build and push operator (ARM64)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -43,6 +43,58 @@ jobs:
           tags: |
             ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-arm64
             ${{ env.OPERATOR_IMAGE }}:latest-arm64
+
+  build-operator-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push operator (AMD64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-amd64
+            ${{ env.OPERATOR_IMAGE }}:latest-amd64
+
+  create-multiarch-manifest:
+    needs: [build-operator-arm64, build-operator-amd64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Create and push multi-arch manifest
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}
             ${{ env.OPERATOR_IMAGE }}:latest
 
   build-caib-arm64:
@@ -124,10 +176,6 @@ jobs:
           name: Release ${{ github.ref_name }}
           body: |
             Automotive Image Builder CLI ${{ github.ref_name }}
-
-            Available for:
-            - ARM64 (arm64)
-            - X86_64 (amd64)
           draft: false
           prerelease: false
         env:
