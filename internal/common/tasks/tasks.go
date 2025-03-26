@@ -327,7 +327,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "quay.io/centos-sig-automotive/automotive-osbuild:latest",
+						StringVal: "quay.io/centos-sig-automotive/automotive-image-builder:latest",
 					},
 					Description: "Automotive OSBuild image to use for building",
 				},

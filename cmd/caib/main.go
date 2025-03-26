@@ -110,7 +110,7 @@ func main() {
 	buildCmd.Flags().StringVar(&architecture, "arch", "arm64", "architecture (amd64, arm64)")
 	buildCmd.Flags().StringVar(&exportFormat, "export-format", "image", "export format (image, qcow2)")
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
-	buildCmd.Flags().StringVar(&osbuildImage, "osbuild-image", "quay.io/centos-sig-automotive/automotive-osbuild:latest", "automotive osbuild image")
+	buildCmd.Flags().StringVar(&osbuildImage, "osbuild-image", "quay.io/centos-sig-automotive/automotive-image-builder:latest", "automotive osbuild image")
 	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
