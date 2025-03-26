@@ -275,7 +275,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 				{
 					MatchExpressions: []corev1.NodeSelectorRequirement{
 						{
-							Key:      "kubernetes.io/arch",
+							Key:      corev1.LabelArchStable,
 							Operator: corev1.NodeSelectorOpIn,
 							Values:   []string{imageBuild.Spec.Architecture},
 						},
@@ -290,7 +290,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 			GenerateName: fmt.Sprintf("%s-build-", imageBuild.Name),
 			Namespace:    imageBuild.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
+				tektonv1.ManagedByLabelKey:                        "automotive-dev-operator",
 				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{
