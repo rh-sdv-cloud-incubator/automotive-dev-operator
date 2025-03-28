@@ -146,13 +146,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	if buildName == "" {
-		buildName = "build"
-	}
-
-	generatedName := buildName + "-"
-
-	configMapName, manifestData, err := setupManifestConfigMap(ctx, c, generatedName, namespace, manifest)
+	configMapName, manifestData, err := setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
 	if err != nil {
 		handleError(err)
 	}
@@ -161,12 +155,10 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	imageBuild, err := createImageBuildWithGenerateName(ctx, c, generatedName, namespace, configMapName, manifestData)
+	imageBuild, err := createImageBuild(ctx, c, buildName, namespace, configMapName, manifestData)
 	if err != nil {
 		handleError(err)
 	}
-
-	buildName = imageBuild.Name
 
 	if err := handleLocalFileUploads(ctx, c, namespace, imageBuild, manifestData); err != nil {
 		handleError(err)
@@ -181,51 +173,51 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 }
 
-func createImageBuildWithGenerateName(ctx context.Context, c client.Client, namePrefix, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
-    localFileRefs, err := findLocalFileReferences(string(manifestData))
-    if err != nil {
-        return nil, fmt.Errorf("error in manifest file references: %w", err)
-    }
+func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
+	localFileRefs, err := findLocalFileReferences(string(manifestData))
+	if err != nil {
+		return nil, fmt.Errorf("error in manifest file references: %w", err)
+	}
 
-    labels := map[string]string{
-        "app.kubernetes.io/managed-by": "caib",
-        "app.kubernetes.io/part-of":    "automotive-dev",
-        "app.kubernetes.io/created-by": "caib-cli",
-        "automotive.sdv.cloud.redhat.com/distro": distro,
-        "automotive.sdv.cloud.redhat.com/target": target,
-        "automotive.sdv.cloud.redhat.com/architecture": architecture,
-    }
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by":                 "caib",
+		"app.kubernetes.io/part-of":                    "automotive-dev",
+		"app.kubernetes.io/created-by":                 "caib-cli",
+		"automotive.sdv.cloud.redhat.com/distro":       distro,
+		"automotive.sdv.cloud.redhat.com/target":       target,
+		"automotive.sdv.cloud.redhat.com/architecture": architecture,
+	}
 
-    imageBuild := &automotivev1.ImageBuild{
-        ObjectMeta: metav1.ObjectMeta{
-            GenerateName: namePrefix,
-            Namespace:    ns,
-            Labels:       labels,
-        },
-        Spec: automotivev1.ImageBuildSpec{
-            Distro:                 distro,
-            Target:                 target,
-            Architecture:           architecture,
-            ExportFormat:           exportFormat,
-            Mode:                   mode,
-            AutomativeOSBuildImage: osbuildImage,
-            StorageClass:           storageClass,
-            ServeArtifact:          waitForBuild && download,
-            ServeExpiryHours:       24,
-            ManifestConfigMap:      configMapName,
-            InputFilesServer:       len(localFileRefs) > 0,
-        },
-    }
+	imageBuild := &automotivev1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Spec: automotivev1.ImageBuildSpec{
+			Distro:                 distro,
+			Target:                 target,
+			Architecture:           architecture,
+			ExportFormat:           exportFormat,
+			Mode:                   mode,
+			AutomativeOSBuildImage: osbuildImage,
+			StorageClass:           storageClass,
+			ServeArtifact:          waitForBuild && download,
+			ServeExpiryHours:       24,
+			ManifestConfigMap:      configMapName,
+			InputFilesServer:       len(localFileRefs) > 0,
+		},
+	}
 
-    if err := c.Create(ctx, imageBuild); err != nil {
-        return nil, fmt.Errorf("error creating ImageBuild: %w", err)
-    }
+	if err := c.Create(ctx, imageBuild); err != nil {
+		return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+	}
 
-    if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
-        return nil, err
-    }
+	if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
+		return nil, err
+	}
 
-    return imageBuild, nil
+	return imageBuild, nil
 }
 
 func initializeBuildClient() (client.Client, error) {
@@ -240,6 +232,11 @@ func validateBuildRequirements() error {
 	if manifest == "" {
 		return fmt.Errorf("--manifest is required")
 	}
+
+	if buildName == "" {
+		return fmt.Errorf("name is required")
+	}
+
 	return nil
 }
 
@@ -259,38 +256,38 @@ func handleLocalFileUploads(ctx context.Context, c client.Client, ns string, ima
 	return nil
 }
 
-func setupManifestConfigMap(ctx context.Context, c client.Client, namePrefix, ns, manifestPath string) (string, []byte, error) {
-    manifestData, err := os.ReadFile(manifestPath)
-    if err != nil {
-        return "", nil, fmt.Errorf("error reading manifest file: %w", err)
-    }
+func setupManifestConfigMap(ctx context.Context, c client.Client, name, ns, manifestPath string) (string, []byte, error) {
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("error reading manifest file: %w", err)
+	}
 
-    configMapName := fmt.Sprintf("%s-manifest", namePrefix)
+	configMapName := fmt.Sprintf("%s-manifest", name)
 
-    labels := map[string]string{
-        "app.kubernetes.io/managed-by": "caib",
-        "app.kubernetes.io/part-of":    "automotive-dev",
-        "app.kubernetes.io/created-by": "caib-cli",
-        "automotive.sdv.cloud.redhat.com/resource-type": "manifest-config",
-    }
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by":                  "caib",
+		"app.kubernetes.io/part-of":                     "automotive-dev",
+		"app.kubernetes.io/created-by":                  "caib-cli",
+		"automotive.sdv.cloud.redhat.com/resource-type": "manifest-config",
+	}
 
-    configMap := &corev1.ConfigMap{
-        ObjectMeta: metav1.ObjectMeta{
-            GenerateName: configMapName,
-            Namespace:    ns,
-            Labels:       labels,
-        },
-        Data: map[string]string{
-            filepath.Base(manifestPath): string(manifestData),
-        },
-    }
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Data: map[string]string{
+			filepath.Base(manifestPath): string(manifestData),
+		},
+	}
 
-    fmt.Printf("Creating ConfigMap with manifest file %s\n", manifestPath)
-    if err := c.Create(ctx, configMap); err != nil {
-        return "", nil, fmt.Errorf("error creating ConfigMap: %w", err)
-    }
+	fmt.Printf("Creating ConfigMap with manifest file %s\n", manifestPath)
+	if err := c.Create(ctx, configMap); err != nil {
+		return "", nil, fmt.Errorf("error creating ConfigMap: %w", err)
+	}
 
-    return configMap.Name, manifestData, nil
+	return configMap.Name, manifestData, nil
 }
 
 func updateConfigMapOwnership(ctx context.Context, c client.Client, configMapName, ns string, imageBuild *automotivev1.ImageBuild) error {
@@ -301,11 +298,11 @@ func updateConfigMapOwnership(ctx context.Context, c client.Client, configMapNam
 
 	configMap.OwnerReferences = []metav1.OwnerReference{
 		{
-			APIVersion:         "automotive.sdv.cloud.redhat.com/v1",
-			Kind:               "ImageBuild",
-			Name:               imageBuild.Name,
-			UID:                imageBuild.UID,
-			Controller:         ptr.To(true),
+			APIVersion: "automotive.sdv.cloud.redhat.com/v1",
+			Kind:       "ImageBuild",
+			Name:       imageBuild.Name,
+			UID:        imageBuild.UID,
+			Controller: ptr.To(true),
 		},
 	}
 
@@ -449,7 +446,6 @@ func uploadLocalFiles(namespace string, files []map[string]string, uploadPod *co
 		if err := copyFile(config, namespace, uploadPod.Name, uploadPod.Spec.Containers[0].Name, sourcePath, "/workspace/shared/"+destPath, true); err != nil {
 			return fmt.Errorf("error copying file %s: %w", sourcePath, err)
 		}
-
 	}
 
 	return nil
@@ -697,7 +693,6 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 		return
 	}
 
-	// First, find the pod with backoff
 	backoff := wait.Backoff{
 		Steps:    5,
 		Duration: 5 * time.Second,
@@ -722,7 +717,6 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 		for i := range podList.Items {
 			pod := &podList.Items[i]
 			if pod.Status.Phase == corev1.PodRunning {
-				// Verify the container is ready
 				for _, status := range pod.Status.ContainerStatuses {
 					if status.Name == "fileserver" && status.Ready {
 						artifactPod = pod
@@ -758,7 +752,6 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	}
 
 	downloadErr := wait.ExponentialBackoff(downloadBackoff, func() (bool, error) {
-		// Get a fresh config for each try
 		freshConfig, err := getRESTConfig()
 		if err != nil {
 			fmt.Printf("Failed to get REST config (will retry): %v\n", err)
@@ -948,7 +941,6 @@ func runShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("  Artifact Path:  %s\n", build.Status.ArtifactPath)
 		fmt.Printf("  File Name:      %s\n", build.Status.ArtifactFileName)
 	}
-
 }
 
 func getClient() (client.Client, error) {

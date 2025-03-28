@@ -55,8 +55,6 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.Info("Reconciling ImageBuild", "name", imageBuild.Name, "phase", imageBuild.Status.Phase)
-
 	switch imageBuild.Status.Phase {
 	case "":
 		return r.handleInitialState(ctx, imageBuild)
@@ -178,9 +176,29 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 }
 
 func (r *ImageBuildReconciler) startNewBuild(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {
+	pvcName, err := r.getOrCreateWorkspacePVC(ctx, imageBuild)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get or create workspace PVC: %w", err)
+	}
+
+	if imageBuild.Status.PVCName != pvcName {
+		fresh := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get fresh ImageBuild: %w", err)
+		}
+
+		fresh.Status.PVCName = pvcName
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update ImageBuild status with PVC name: %w", err)
+		}
+
+		imageBuild.Status.PVCName = pvcName
+	}
+
 	if err := r.createBuildTaskRun(ctx, imageBuild); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create build task run: %w", err)
 	}
+
 	return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 }
 
@@ -190,22 +208,26 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 
 	buildTask := tasks.GenerateBuildAutomotiveImageTask(OperatorNamespace)
 
-	workspacePVCName, err := r.getOrCreateWorkspacePVC(ctx, imageBuild)
-	if err != nil {
-		return err
+	if imageBuild.Status.PVCName == "" {
+		workspacePVCName, err := r.getOrCreateWorkspacePVC(ctx, imageBuild)
+		if err != nil {
+			return err
+		}
+
+		fresh := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
+			return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
+		}
+
+		fresh.Status.PVCName = workspacePVCName
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			return fmt.Errorf("failed to update ImageBuild status with PVC name: %w", err)
+		}
+
+		imageBuild.Status.PVCName = workspacePVCName
 	}
 
-	freshImageBuild := &automotivev1.ImageBuild{}
-	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, freshImageBuild); err != nil {
-		return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
-	}
-
-	freshImageBuild.Status.PVCName = workspacePVCName
-	if err := r.Status().Update(ctx, freshImageBuild); err != nil {
-		return fmt.Errorf("failed to update ImageBuild status with PVC name: %w", err)
-	}
-
-	imageBuild.Status.PVCName = workspacePVCName
+	workspacePVCName := imageBuild.Status.PVCName
 
 	params := []tektonv1.Param{
 		{
@@ -335,9 +357,11 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 
 func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
+
 	pvcName := imageBuild.Status.PVCName
 	if pvcName == "" {
-		pvcName = fmt.Sprintf("%s-shared-workspace", imageBuild.Name)
+		log.Error(nil, "No PVC name found in ImageBuild status")
+		return ctrl.Result{}, fmt.Errorf("no PVC name found in ImageBuild status")
 	}
 
 	var fileExtension string
@@ -356,7 +380,6 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 
 	log.Info("Setting artifact info", "pvc", pvcName, "fileName", fileName)
 
-	imageBuild.Status.PVCName = pvcName
 	imageBuild.Status.ArtifactPath = "/"
 	imageBuild.Status.ArtifactFileName = fileName
 
@@ -394,6 +417,18 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 		if err != nil {
 			return err
 		}
+
+		fresh := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
+			return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
+		}
+
+		fresh.Status.PVCName = workspacePVCName
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			return fmt.Errorf("failed to update ImageBuild status with PVC name: %w", err)
+		}
+
+		imageBuild.Status.PVCName = workspacePVCName
 	}
 
 	labels := map[string]string{
@@ -532,6 +567,20 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		return err
 	}
 
+	if imageBuild.Status.PVCName != workspacePVCName {
+		fresh := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
+			return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
+		}
+
+		fresh.Status.PVCName = workspacePVCName
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			return fmt.Errorf("failed to update ImageBuild status with PVC name: %w", err)
+		}
+
+		imageBuild.Status.PVCName = workspacePVCName
+	}
+
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
 		"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
@@ -619,16 +668,6 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 	}
 
 	log.Info("Upload pod is ready", "pod", podName)
-	fresh := &automotivev1.ImageBuild{}
-	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
-		return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
-	}
-
-	fresh.Status.PVCName = workspacePVCName
-	if err := r.Status().Update(ctx, fresh); err != nil {
-		return fmt.Errorf("failed to update ImageBuild PVC name: %w", err)
-	}
-
 	return nil
 }
 
@@ -650,27 +689,29 @@ func (r *ImageBuildReconciler) updateStatus(ctx context.Context, imageBuild *aut
 func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(ctx context.Context, imageBuild *automotivev1.ImageBuild) (string, error) {
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
 
-	workspacePVCName := fmt.Sprintf("%s-shared-workspace", imageBuild.Name)
+	if imageBuild.Status.PVCName != "" {
+		existingPVC := &corev1.PersistentVolumeClaim{}
+		err := r.Get(ctx, types.NamespacedName{
+			Name:      imageBuild.Status.PVCName,
+			Namespace: imageBuild.Namespace,
+		}, existingPVC)
 
-	existingPVC := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{
-		Name:      workspacePVCName,
-		Namespace: imageBuild.Namespace,
-	}, existingPVC)
+		if err == nil && existingPVC.DeletionTimestamp == nil {
+			log.Info("Using existing workspace PVC from status", "pvc", imageBuild.Status.PVCName)
+			return imageBuild.Status.PVCName, nil
+		}
 
-	if err == nil {
-		log.Info("Using existing workspace PVC", "pvc", workspacePVCName)
-		return workspacePVCName, nil
+		log.Info("PVC from status is not available, creating a new one",
+			"old-pvc", imageBuild.Status.PVCName)
 	}
 
-	if !errors.IsNotFound(err) {
-		return "", fmt.Errorf("error checking for existing PVC: %w", err)
-	}
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	uniquePVCName := fmt.Sprintf("%s-ws-%s", imageBuild.Name, timestamp)
 
 	storageSize := resource.MustParse("8Gi")
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      workspacePVCName,
+			Name:      uniquePVCName,
 			Namespace: imageBuild.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
@@ -707,8 +748,8 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(ctx context.Context, imag
 		return "", fmt.Errorf("failed to create workspace PVC: %w", err)
 	}
 
-	log.Info("Created new workspace PVC", "pvc", workspacePVCName)
-	return workspacePVCName, nil
+	log.Info("Created new workspace PVC with unique name", "pvc", uniquePVCName)
+	return uniquePVCName, nil
 }
 
 func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild *automotivev1.ImageBuild) error {
