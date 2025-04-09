@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+
 	"gopkg.in/yaml.v3"
 
 	"github.com/go-logr/logr"
@@ -135,74 +137,81 @@ func main() {
 }
 
 func runBuild(cmd *cobra.Command, args []string) {
-    ctx := context.Background()
+	ctx := context.Background()
 
-    c, err := initializeBuildClient()
-    if err != nil {
-        handleError(err)
-    }
+	c, err := initializeBuildClient()
+	if err != nil {
+		handleError(err)
+	}
 
-    if err := validateBuildRequirements(); err != nil {
-        handleError(err)
-    }
+	if err := validateBuildRequirements(); err != nil {
+		handleError(err)
+	}
 
-    var configMapName string
-    var manifestData []byte
+	existing := &automotivev1.ImageBuild{}
+	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existing)
+	if err == nil {
+		handleError(fmt.Errorf("ImageBuild %s already exists in namespace %s", buildName, namespace))
+	} else if !errors.IsNotFound(err) {
+		handleError(fmt.Errorf("error checking if ImageBuild exists: %w", err))
+	}
 
-    configMapName, manifestData, err = setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
-    if err != nil {
-        handleError(err)
-    }
+	var configMapName string
+	var manifestData []byte
 
-    needsCleanup := true
-    defer func() {
-        if needsCleanup {
-            fmt.Printf("Cleaning up ConfigMap %s due to incomplete operation\n", configMapName)
-            deleteCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-            defer cancel()
+	configMapName, manifestData, err = setupManifestConfigMap(ctx, c, buildName, namespace, manifest)
+	if err != nil {
+		handleError(err)
+	}
 
-            configMap := &corev1.ConfigMap{
-                ObjectMeta: metav1.ObjectMeta{
-                    Name:      configMapName,
-                    Namespace: namespace,
-                },
-            }
+	needsCleanup := true
+	defer func() {
+		if needsCleanup {
+			fmt.Printf("Cleaning up ConfigMap %s due to incomplete operation\n", configMapName)
+			deleteCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-            if delErr := c.Delete(deleteCtx, configMap); delErr != nil {
-                fmt.Printf("Warning: Failed to clean up ConfigMap: %v\n", delErr)
-            }
-        }
-    }()
+			configMap := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      configMapName,
+					Namespace: namespace,
+				},
+			}
 
-    if err := addCustomDefinitionsToConfigMap(ctx, c, configMapName, namespace, customDefs); err != nil {
-        handleError(err)
-    }
+			if delErr := c.Delete(deleteCtx, configMap); delErr != nil {
+				fmt.Printf("Warning: Failed to clean up ConfigMap: %v\n", delErr)
+			}
+		}
+	}()
 
-    imageBuild, err := createImageBuild(ctx, c, buildName, namespace, configMapName, manifestData)
-    if err != nil {
-        handleError(err)
-    }
+	if err := addCustomDefinitionsToConfigMap(ctx, c, configMapName, namespace, customDefs); err != nil {
+		handleError(err)
+	}
 
-    // Update ownership in ConfigMap
-    if err := updateConfigMapOwnership(ctx, c, configMapName, namespace, imageBuild); err != nil {
-        handleError(err)
-    }
+	imageBuild, err := createImageBuild(ctx, c, buildName, namespace, configMapName, manifestData)
+	if err != nil {
+		handleError(err)
+	}
 
-    needsCleanup = false
+	// Update ownership in ConfigMap
+	if err := updateConfigMapOwnership(ctx, c, configMapName, namespace, imageBuild); err != nil {
+		handleError(err)
+	}
 
-    if err := handleLocalFileUploads(ctx, c, namespace, imageBuild, manifestData); err != nil {
-        handleError(err)
-    }
+	needsCleanup = false
 
-    fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
+	if err := handleLocalFileUploads(ctx, c, namespace, imageBuild, manifestData); err != nil {
+		handleError(err)
+	}
 
-    if waitForBuild {
-        if err := handleBuildCompletion(c, imageBuild); err != nil {
-            handleError(err)
-        }
-    }
+	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
+
+	if waitForBuild {
+		if err := handleBuildCompletion(c, imageBuild); err != nil {
+			handleError(err)
+		}
+	}
 }
-
 
 func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
 	localFileRefs, err := findLocalFileReferences(string(manifestData))
