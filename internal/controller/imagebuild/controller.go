@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	routev1 "github.com/openshift/api/route/v1"
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/common/tasks"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
@@ -16,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -386,6 +388,52 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 	if err := r.Status().Update(ctx, imageBuild); err != nil {
 		log.Error(err, "Failed to update status with artifact info")
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+	}
+
+	if imageBuild.Spec.ArtifactsRoute {
+		if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
+			log.Error(err, "Failed to create artifact serving resources")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+		}
+
+		routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
+		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		route := &routev1.Route{}
+		err := wait.PollUntilContextTimeout(
+			timeoutCtx,
+			time.Second,
+			30*time.Second,
+			false,
+			func(ctx context.Context) (bool, error) {
+				if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: imageBuild.Namespace}, route); err != nil {
+					return false, err
+				}
+				return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
+			},
+		)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get route hostname: %w", err)
+		}
+
+		fresh := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to re-fetch ImageBuild: %w", err)
+		}
+
+		scheme := "https"
+		if route.Spec.TLS == nil {
+			scheme = "http"
+			log.Info("TLS is not enabled")
+		}
+
+		fresh.Status.ArtifactURL = fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update ImageBuild status with route URL: %w", err)
+		}
+
+		log.Info("Artifact serving resources created", "route", route.Status.Ingress[0].Host)
 	}
 
 	return ctrl.Result{}, nil
@@ -768,5 +816,98 @@ func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild
 	}
 
 	log.Info("Upload pod deleted")
+	return nil
+}
+
+func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Context, imageBuild *automotivev1.ImageBuild) error {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList,
+		client.InNamespace(imageBuild.Namespace),
+		client.MatchingLabels{
+			"app.kubernetes.io/name":                          "artifact-pod",
+			"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
+		}); err != nil {
+		return fmt.Errorf("failed to list artifact pods: %w", err)
+	}
+	if len(podList.Items) == 0 {
+		return fmt.Errorf("no existing artifact pod found for ImageBuild %s", imageBuild.Name)
+	}
+	artifactPod := &podList.Items[0]
+
+	svcName := fmt.Sprintf("%s-artifact-service", imageBuild.Name)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      svcName,
+			Namespace: imageBuild.Namespace,
+			Labels:    artifactPod.Labels,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         imageBuild.APIVersion,
+					Kind:               imageBuild.Kind,
+					Name:               imageBuild.Name,
+					UID:                imageBuild.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: artifactPod.Labels,
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "http",
+					Port:       8080,
+					TargetPort: intstr.FromInt(8080),
+				},
+			},
+		},
+	}
+	if err := r.Create(ctx, svc); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create service: %w", err)
+	}
+
+	routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
+	route := &routev1.Route{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      routeName,
+			Namespace: imageBuild.Namespace,
+			Labels:    artifactPod.Labels,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         imageBuild.APIVersion,
+					Kind:               imageBuild.Kind,
+					Name:               imageBuild.Name,
+					UID:                imageBuild.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			},
+		},
+		Spec: routev1.RouteSpec{
+			To: routev1.RouteTargetReference{
+				Kind: "Service",
+				Name: svc.Name,
+			},
+			Port: &routev1.RoutePort{
+				TargetPort: intstr.FromInt(8080),
+			},
+		},
+	}
+	if err := r.Create(ctx, route); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create route: %w", err)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	err := wait.PollUntilContextTimeout(timeoutCtx, time.Second, 30*time.Second, false, func(ctx context.Context) (bool, error) {
+		if err := r.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
+			return false, nil
+		}
+		return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get route hostname: %w", err)
+	}
+
 	return nil
 }
