@@ -42,6 +42,10 @@ spec:
               architecture:
                 description: Architecture specifies the target architecture
                 type: string
+              artifactsRoute:
+                description: ArtifactsRoute indicates if expose the pod route for
+                  downloading artifacts
+                type: boolean
               automativeOSBuildImage:
                 description: AutomativeOSBuildImage specifies the image to use for
                   building
@@ -114,6 +118,9 @@ spec:
               artifactPath:
                 description: ArtifactPath is the path inside the PVC where the artifact
                   is stored
+                type: string
+              artifactURL:
+                description: ArtifactURL is the route URL created to expose the artifacts
                 type: string
               completionTime:
                 description: CompletionTime is when the build finished
