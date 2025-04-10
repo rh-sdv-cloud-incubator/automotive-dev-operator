@@ -64,6 +64,9 @@ type ImageBuildSpec struct {
 
 	// InputFilesServer indicates if there's a server for files referenced locally in the manifest
 	InputFilesServer bool `json:"inputFilesServer,omitempty"`
+
+	// ArtifactsRoute indicates if expose the pod route for downloading artifacts
+	ArtifactsRoute bool `json:"artifactsRoute,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing
@@ -106,6 +109,9 @@ type ImageBuildStatus struct {
 
 	// TaskRunName is the name of the active TaskRun for this build
 	TaskRunName string `json:"taskRunName,omitempty"`
+
+	// ArtifactURL is the route URL created to expose the artifacts
+	ArtifactURL string `json:"artifactURL,omitempty"`
 }
 
 // +kubebuilder:object:root=true

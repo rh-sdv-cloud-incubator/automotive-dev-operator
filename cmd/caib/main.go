@@ -41,23 +41,24 @@ import (
 )
 
 var (
-	kubeconfig    string
-	namespace     string
-	imageBuildCfg string
-	manifest      string
-	buildName     string
-	distro        string
-	target        string
-	architecture  string
-	exportFormat  string
-	mode          string
-	osbuildImage  string
-	storageClass  string
-	outputDir     string
-	timeout       int
-	waitForBuild  bool
-	download      bool
-	customDefs    []string
+	kubeconfig     string
+	namespace      string
+	imageBuildCfg  string
+	manifest       string
+	buildName      string
+	distro         string
+	target         string
+	architecture   string
+	exportFormat   string
+	mode           string
+	osbuildImage   string
+	storageClass   string
+	outputDir      string
+	timeout        int
+	waitForBuild   bool
+	download       bool
+	artifactsRoute bool
+	customDefs     []string
 )
 
 func main() {
@@ -117,6 +118,7 @@ func main() {
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
+	buildCmd.Flags().BoolVarP(&artifactsRoute, "route", "r", false, "specify if expose route to download artifacts")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
@@ -246,6 +248,7 @@ func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapN
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      configMapName,
 			InputFilesServer:       len(localFileRefs) > 0,
+			ArtifactsRoute:         artifactsRoute,
 		},
 	}
 
@@ -703,6 +706,8 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 }
 
 func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
+	const outputDir = "/tmp/artifacts"
+
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		fmt.Printf("Error creating output directory: %v\n", err)
 		return
@@ -711,14 +716,14 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	artifactFileName := imageBuild.Status.ArtifactFileName
 	if artifactFileName == "" {
 		var fileExtension string
-		if imageBuild.Spec.ExportFormat == "image" {
+		switch imageBuild.Spec.ExportFormat {
+		case "image":
 			fileExtension = ".raw"
-		} else if imageBuild.Spec.ExportFormat == "qcow2" {
+		case "qcow2":
 			fileExtension = ".qcow2"
-		} else {
+		default:
 			fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
 		}
-
 		artifactFileName = fmt.Sprintf("%s-%s%s",
 			imageBuild.Spec.Distro,
 			imageBuild.Spec.Target,
@@ -773,6 +778,17 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	if findPodErr != nil {
 		fmt.Printf("Failed to find ready artifact pod: %v\n", findPodErr)
 		return
+	}
+
+	// If ExposeArtifacts is true, print the route URL
+	if artifactsRoute {
+		fmt.Println("this is the status: %s", imageBuild.Status)
+		exposedURL := imageBuild.Status.ArtifactURL
+		if exposedURL == "" {
+			fmt.Println("No ArtifactURL found in ImageBuild status")
+			return
+		}
+		fmt.Printf("Artifacts exposed at: %s\n", exposedURL)
 	}
 
 	containerName := "fileserver"
@@ -964,16 +980,17 @@ func runShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("Message:     %s\n", build.Status.Message)
 
 	fmt.Printf("\nBuild Specification:\n")
-	fmt.Printf("  Distro:             %s\n", build.Spec.Distro)
-	fmt.Printf("  Target:             %s\n", build.Spec.Target)
-	fmt.Printf("  Architecture:       %s\n", build.Spec.Architecture)
-	fmt.Printf("  Export Format:      %s\n", build.Spec.ExportFormat)
-	fmt.Printf("  Mode:               %s\n", build.Spec.Mode)
+	fmt.Printf("  Distro:              %s\n", build.Spec.Distro)
+	fmt.Printf("  Target:              %s\n", build.Spec.Target)
+	fmt.Printf("  Architecture:        %s\n", build.Spec.Architecture)
+	fmt.Printf("  Export Format:       %s\n", build.Spec.ExportFormat)
+	fmt.Printf("  Mode:                %s\n", build.Spec.Mode)
 	fmt.Printf("  Manifest ConfigMap:      %s\n", build.Spec.ManifestConfigMap)
-	fmt.Printf("  OSBuild Image:      %s\n", build.Spec.AutomativeOSBuildImage)
-	fmt.Printf("  Storage Class:      %s\n", build.Spec.StorageClass)
-	fmt.Printf("  Serve Artifact:     %v\n", build.Spec.ServeArtifact)
-	fmt.Printf("  Serve Expiry Hours: %d\n", build.Spec.ServeExpiryHours)
+	fmt.Printf("  OSBuild Image:       %s\n", build.Spec.AutomativeOSBuildImage)
+	fmt.Printf("  Storage Class:       %s\n", build.Spec.StorageClass)
+	fmt.Printf("  Serve Artifact:      %v\n", build.Spec.ServeArtifact)
+	fmt.Printf("  Serve Expiry Hours:  %d\n", build.Spec.ServeExpiryHours)
+	fmt.Printf("  Server Route Expose: %s\n", build.Spec.ArtifactsRoute)
 
 	if build.Status.Phase == "Completed" {
 		fmt.Printf("\nArtifacts:\n")

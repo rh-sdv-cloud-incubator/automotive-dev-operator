@@ -11,6 +11,7 @@ rules:
   - persistentvolumeclaims
   - pods
   - serviceaccounts
+  - services
   verbs:
   - create
   - delete
@@ -91,6 +92,18 @@ rules:
   - pipelines
   - taskruns
   - tasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
   verbs:
   - create
   - delete
