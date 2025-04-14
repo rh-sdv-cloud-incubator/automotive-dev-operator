@@ -41,24 +41,24 @@ import (
 )
 
 var (
-	kubeconfig     string
-	namespace      string
-	imageBuildCfg  string
-	manifest       string
-	buildName      string
-	distro         string
-	target         string
-	architecture   string
-	exportFormat   string
-	mode           string
-	osbuildImage   string
-	storageClass   string
-	outputDir      string
-	timeout        int
-	waitForBuild   bool
-	download       bool
-	artifactsRoute bool
-	customDefs     []string
+	kubeconfig    string
+	namespace     string
+	imageBuildCfg string
+	manifest      string
+	buildName     string
+	distro        string
+	target        string
+	architecture  string
+	exportFormat  string
+	mode          string
+	osbuildImage  string
+	storageClass  string
+	outputDir     string
+	timeout       int
+	waitForBuild  bool
+	download      bool
+	exposeRoute   bool
+	customDefs    []string
 )
 
 func main() {
@@ -118,12 +118,13 @@ func main() {
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
-	buildCmd.Flags().BoolVarP(&artifactsRoute, "route", "r", false, "specify if expose route to download artifacts")
+	buildCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
 	downloadCmd.Flags().StringVar(&outputDir, "output-dir", "./output", "directory to save artifacts")
+	downloadCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
 	downloadCmd.MarkFlagRequired("name")
 
 	listCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace to list ImageBuilds from")
@@ -248,7 +249,7 @@ func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapN
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      configMapName,
 			InputFilesServer:       len(localFileRefs) > 0,
-			ArtifactsRoute:         artifactsRoute,
+			ExposeRoute:            exposeRoute,
 		},
 	}
 
@@ -380,6 +381,14 @@ func handleBuildCompletion(c client.Client, imageBuild *automotivev1.ImageBuild)
 	}
 
 	if download && completeBuild.Status.Phase == "Completed" {
+		if exposeRoute {
+			fmt.Println("Waiting for artifact URL to be available...")
+			completeBuild, err = waitForArtifactURL(c, completeBuild.Name, completeBuild.Namespace)
+			if err != nil {
+				fmt.Printf("Warning: %v\n", err)
+			}
+		}
+
 		downloadArtifacts(completeBuild)
 	}
 	return nil
@@ -781,7 +790,7 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	}
 
 	// If ExposeArtifacts is true, print the route URL
-	if artifactsRoute {
+	if exposeRoute {
 		exposedURL := imageBuild.Status.ArtifactURL
 		if exposedURL == "" {
 			fmt.Println("No ArtifactURL found in ImageBuild status")
@@ -920,6 +929,18 @@ func runDownload(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	if exposeRoute {
+		exposedURL := imageBuild.Status.ArtifactURL
+		if exposedURL == "" {
+			fmt.Printf("No ArtifactURL found in ImageBuild status for %s\n", buildName)
+			os.Exit(1)
+		}
+		artifactFileName := imageBuild.Status.ArtifactFileName
+		fmt.Printf("Artifacts are available for download at: %s\n",
+			exposedURL+"/workspace/shared/"+artifactFileName)
+		return
+	}
+
 	downloadArtifacts(imageBuild)
 }
 
@@ -989,7 +1010,7 @@ func runShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("  Storage Class:       %s\n", build.Spec.StorageClass)
 	fmt.Printf("  Serve Artifact:      %v\n", build.Spec.ServeArtifact)
 	fmt.Printf("  Serve Expiry Hours:  %d\n", build.Spec.ServeExpiryHours)
-	fmt.Printf("  Server Route Expose: %s\n", build.Spec.ArtifactsRoute)
+	fmt.Printf("  Server Route Expose: %v\n", build.Spec.ExposeRoute)
 
 	if build.Status.Phase == "Completed" {
 		fmt.Printf("\nArtifacts:\n")
@@ -1155,4 +1176,39 @@ func addCustomDefinitionsToConfigMap(ctx context.Context, c client.Client, confi
 	}
 
 	return nil
+}
+
+func waitForArtifactURL(c client.Client, name, namespace string) (*automotivev1.ImageBuild, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var updatedBuild *automotivev1.ImageBuild
+
+	err := wait.PollUntilContextTimeout(
+		ctx,
+		5*time.Second,
+		2*time.Minute,
+		false,
+		func(ctx context.Context) (bool, error) {
+			build := &automotivev1.ImageBuild{}
+			if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+				return false, err
+			}
+
+			updatedBuild = build
+
+			if build.Status.ArtifactURL != "" {
+				return true, nil
+			}
+
+			fmt.Print(".")
+			return false, nil
+		})
+
+	fmt.Println()
+	if err != nil {
+		return updatedBuild, fmt.Errorf("timed out waiting for artifact URL: %w", err)
+	}
+
+	return updatedBuild, nil
 }

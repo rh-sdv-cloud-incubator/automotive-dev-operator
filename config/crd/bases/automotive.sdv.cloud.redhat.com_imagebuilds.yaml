@@ -42,10 +42,6 @@ spec:
               architecture:
                 description: Architecture specifies the target architecture
                 type: string
-              artifactsRoute:
-                description: ArtifactsRoute indicates if expose the pod route for
-                  downloading artifacts
-                type: boolean
               automativeOSBuildImage:
                 description: AutomativeOSBuildImage specifies the image to use for
                   building
@@ -57,6 +53,10 @@ spec:
               exportFormat:
                 description: ExportFormat specifies the output format (image, qcow2)
                 type: string
+              exposeRoute:
+                description: ExposeRoute indicates whether to expose the a route for
+                  the artifacts
+                type: boolean
               inputFilesServer:
                 description: InputFilesServer indicates if there's a server for files
                   referenced locally in the manifest

@@ -47,6 +47,8 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile ImageBuild
 func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -390,7 +392,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
-	if imageBuild.Spec.ArtifactsRoute {
+	if imageBuild.Spec.ExposeRoute {
 		if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
 			log.Error(err, "Failed to create artifact serving resources")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
@@ -408,18 +410,20 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			false,
 			func(ctx context.Context) (bool, error) {
 				if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: imageBuild.Namespace}, route); err != nil {
-					return false, err
+					log.Error(err, "Error getting route")
+					return false, nil
 				}
 				return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
 			},
 		)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to get route hostname: %w", err)
+			log.Error(err, "timed out waiting for route hostname")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		fresh := &automotivev1.ImageBuild{}
-		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to re-fetch ImageBuild: %w", err)
+		if route.Status.Ingress == nil || len(route.Status.Ingress) == 0 || route.Status.Ingress[0].Host == "" {
+			log.Info("route status not yet populated with host", "route", routeName)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
 		scheme := "https"
@@ -428,12 +432,16 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			log.Info("TLS is not enabled")
 		}
 
-		fresh.Status.ArtifactURL = fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
-		if err := r.Status().Update(ctx, fresh); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update ImageBuild status with route URL: %w", err)
+		artifactURL := fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
+		log.Info("setting artifact URL in status", "url", artifactURL)
+
+		imageBuild.Status.ArtifactURL = artifactURL
+		if err := r.Status().Update(ctx, imageBuild); err != nil {
+			log.Error(err, "failed to update ImageBuild status with route URL")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		log.Info("Artifact serving resources created", "route", route.Status.Ingress[0].Host)
+		log.Info("artifact serving resources created and status updated", "route", route.Status.Ingress[0].Host)
 	}
 
 	return ctrl.Result{}, nil
@@ -479,6 +487,12 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 		imageBuild.Status.PVCName = workspacePVCName
 	}
 
+	// Create ConfigMap for nginx configuration
+	nginxConfigMapName, err := r.createNginxConfigMap(ctx, imageBuild)
+	if err != nil {
+		return fmt.Errorf("failed to create nginx config map: %w", err)
+	}
+
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
 		"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
@@ -510,9 +524,14 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 			},
 			Containers: []corev1.Container{
 				{
-					Name:    "fileserver",
-					Image:   "registry.access.redhat.com/ubi8/ubi-minimal:latest",
-					Command: []string{"sleep", "infinity"},
+					Name:  "fileserver",
+					Image: "quay.io/nginx/nginx-unprivileged:latest",
+					Ports: []corev1.ContainerPort{
+						{
+							ContainerPort: 8080,
+							Protocol:      corev1.ProtocolTCP,
+						},
+					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -529,6 +548,11 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 							MountPath: "/workspace/shared",
 							ReadOnly:  true,
 						},
+						{
+							Name:      "nginx-config",
+							MountPath: "/etc/nginx/conf.d",
+							ReadOnly:  true,
+						},
 					},
 				},
 			},
@@ -538,6 +562,16 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: workspacePVCName,
+						},
+					},
+				},
+				{
+					Name: "nginx-config",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: nginxConfigMapName,
+							},
 						},
 					},
 				},
@@ -568,6 +602,57 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 
 	log.Info("Artifact pod is ready", "pod", podName)
 	return nil
+}
+
+func (r *ImageBuildReconciler) createNginxConfigMap(ctx context.Context, imageBuild *automotivev1.ImageBuild) (string, error) {
+	configMapName := fmt.Sprintf("%s-nginx-config", imageBuild.Name)
+
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: imageBuild.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         imageBuild.APIVersion,
+					Kind:               imageBuild.Kind,
+					Name:               imageBuild.Name,
+					UID:                imageBuild.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			},
+		},
+		Data: map[string]string{
+			"default.conf": `
+server {
+    listen 8080;
+    server_name localhost;
+
+    location / {
+        root   /;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+        try_files $uri $uri/ =404;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+}
+    `,
+		},
+	}
+
+	if err := r.Create(ctx, configMap); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return configMapName, nil
+		}
+		return "", fmt.Errorf("failed to create nginx config ConfigMap: %w", err)
+	}
+
+	return configMapName, nil
 }
 
 func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
