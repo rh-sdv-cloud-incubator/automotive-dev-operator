@@ -129,9 +129,20 @@ func (r *ImageBuildReconciler) handleBuildingState(ctx context.Context, imageBui
 		if tr.DeletionTimestamp == nil {
 			log.Info("Found existing TaskRun for this ImageBuild", "taskRun", tr.Name)
 
-			imageBuild.Status.TaskRunName = tr.Name
-			if err := r.Status().Update(ctx, imageBuild); err != nil {
-				log.Error(err, "Failed to update ImageBuild with existing TaskRun name")
+			latestImageBuild := &automotivev1.ImageBuild{}
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      imageBuild.Name,
+				Namespace: imageBuild.Namespace,
+			}, latestImageBuild); err != nil {
+				log.Error(err, "Failed to get latest ImageBuild")
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+			}
+
+			patch := client.MergeFrom(latestImageBuild.DeepCopy())
+			latestImageBuild.Status.TaskRunName = tr.Name
+
+			if err := r.Status().Patch(ctx, latestImageBuild, patch); err != nil {
+				log.Error(err, "Failed to patch ImageBuild with existing TaskRun name")
 				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 			}
 
@@ -164,10 +175,18 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 		if err := r.updateStatus(ctx, imageBuild, "Completed", "Build completed successfully"); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 		}
+
 		if imageBuild.Spec.ServeArtifact {
 			if err := r.createArtifactPod(ctx, imageBuild); err != nil {
 				return ctrl.Result{}, err
 			}
+
+			if imageBuild.Spec.ExposeRoute {
+				if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+
 			return r.updateArtifactInfo(ctx, imageBuild)
 		}
 		return ctrl.Result{}, nil
@@ -362,43 +381,46 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
 
-	pvcName := imageBuild.Status.PVCName
+	latestImageBuild := &automotivev1.ImageBuild{}
+	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, latestImageBuild); err != nil {
+		log.Error(err, "Failed to get latest ImageBuild")
+		return ctrl.Result{}, err
+	}
+
+	pvcName := latestImageBuild.Status.PVCName
 	if pvcName == "" {
 		log.Error(nil, "No PVC name found in ImageBuild status")
 		return ctrl.Result{}, fmt.Errorf("no PVC name found in ImageBuild status")
 	}
 
 	var fileExtension string
-	if imageBuild.Spec.ExportFormat == "image" {
+	if latestImageBuild.Spec.ExportFormat == "image" {
 		fileExtension = ".raw"
-	} else if imageBuild.Spec.ExportFormat == "qcow2" {
+	} else if latestImageBuild.Spec.ExportFormat == "qcow2" {
 		fileExtension = ".qcow2"
 	} else {
-		fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
+		fileExtension = fmt.Sprintf(".%s", latestImageBuild.Spec.ExportFormat)
 	}
 
 	fileName := fmt.Sprintf("%s-%s%s",
-		imageBuild.Spec.Distro,
-		imageBuild.Spec.Target,
+		latestImageBuild.Spec.Distro,
+		latestImageBuild.Spec.Target,
 		fileExtension)
 
 	log.Info("Setting artifact info", "pvc", pvcName, "fileName", fileName)
 
-	imageBuild.Status.ArtifactPath = "/"
-	imageBuild.Status.ArtifactFileName = fileName
+	patch := client.MergeFrom(latestImageBuild.DeepCopy())
 
-	if err := r.Status().Update(ctx, imageBuild); err != nil {
-		log.Error(err, "Failed to update status with artifact info")
+	latestImageBuild.Status.ArtifactPath = "/"
+	latestImageBuild.Status.ArtifactFileName = fileName
+
+	if err := r.Status().Patch(ctx, latestImageBuild, patch); err != nil {
+		log.Error(err, "Failed to patch status with artifact info")
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
-	if imageBuild.Spec.ExposeRoute {
-		if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
-			log.Error(err, "Failed to create artifact serving resources")
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
-		}
-
-		routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
+	if latestImageBuild.Spec.ExposeRoute {
+		routeName := fmt.Sprintf("%s-artifacts", latestImageBuild.Name)
 		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
@@ -409,7 +431,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			30*time.Second,
 			false,
 			func(ctx context.Context) (bool, error) {
-				if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: imageBuild.Namespace}, route); err != nil {
+				if err := r.Get(ctx, client.ObjectKey{Name: routeName, Namespace: latestImageBuild.Namespace}, route); err != nil {
 					log.Error(err, "Error getting route")
 					return false, nil
 				}
@@ -435,8 +457,16 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 		artifactURL := fmt.Sprintf("%s://%s", scheme, route.Status.Ingress[0].Host)
 		log.Info("setting artifact URL in status", "url", artifactURL)
 
-		imageBuild.Status.ArtifactURL = artifactURL
-		if err := r.Status().Update(ctx, imageBuild); err != nil {
+		freshBuild := &automotivev1.ImageBuild{}
+		if err := r.Get(ctx, types.NamespacedName{Name: latestImageBuild.Name, Namespace: latestImageBuild.Namespace}, freshBuild); err != nil {
+			log.Error(err, "Failed to get fresh ImageBuild for URL update")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		urlPatch := client.MergeFrom(freshBuild.DeepCopy())
+		freshBuild.Status.ArtifactURL = artifactURL
+
+		if err := r.Status().Patch(ctx, freshBuild, urlPatch); err != nil {
 			log.Error(err, "failed to update ImageBuild status with route URL")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
@@ -487,7 +517,6 @@ func (r *ImageBuildReconciler) createArtifactPod(ctx context.Context, imageBuild
 		imageBuild.Status.PVCName = workspacePVCName
 	}
 
-	// Create ConfigMap for nginx configuration
 	nginxConfigMapName, err := r.createNginxConfigMap(ctx, imageBuild)
 	if err != nil {
 		return fmt.Errorf("failed to create nginx config map: %w", err)
@@ -805,18 +834,28 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 }
 
 func (r *ImageBuildReconciler) updateStatus(ctx context.Context, imageBuild *automotivev1.ImageBuild, phase, message string) error {
-	imageBuild.Status.Phase = phase
-	imageBuild.Status.Message = message
-
-	if phase == "Building" && imageBuild.Status.StartTime == nil {
-		now := metav1.Now()
-		imageBuild.Status.StartTime = &now
-	} else if (phase == "Completed" || phase == "Failed") && imageBuild.Status.CompletionTime == nil {
-		now := metav1.Now()
-		imageBuild.Status.CompletionTime = &now
+	fresh := &automotivev1.ImageBuild{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      imageBuild.Name,
+		Namespace: imageBuild.Namespace,
+	}, fresh); err != nil {
+		return err
 	}
 
-	return r.Status().Update(ctx, imageBuild)
+	patch := client.MergeFrom(fresh.DeepCopy())
+
+	fresh.Status.Phase = phase
+	fresh.Status.Message = message
+
+	if phase == "Building" && fresh.Status.StartTime == nil {
+		now := metav1.Now()
+		fresh.Status.StartTime = &now
+	} else if (phase == "Completed" || phase == "Failed") && fresh.Status.CompletionTime == nil {
+		now := metav1.Now()
+		fresh.Status.CompletionTime = &now
+	}
+
+	return r.Status().Patch(ctx, fresh, patch)
 }
 
 func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(ctx context.Context, imageBuild *automotivev1.ImageBuild) (string, error) {
@@ -905,6 +944,8 @@ func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild
 }
 
 func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Context, imageBuild *automotivev1.ImageBuild) error {
+	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
+
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.InNamespace(imageBuild.Namespace),
@@ -914,84 +955,91 @@ func (r *ImageBuildReconciler) createArtifactServingResources(ctx context.Contex
 		}); err != nil {
 		return fmt.Errorf("failed to list artifact pods: %w", err)
 	}
+
 	if len(podList.Items) == 0 {
 		return fmt.Errorf("no existing artifact pod found for ImageBuild %s", imageBuild.Name)
 	}
 	artifactPod := &podList.Items[0]
 
 	svcName := fmt.Sprintf("%s-artifact-service", imageBuild.Name)
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      svcName,
-			Namespace: imageBuild.Namespace,
-			Labels:    artifactPod.Labels,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         imageBuild.APIVersion,
-					Kind:               imageBuild.Kind,
-					Name:               imageBuild.Name,
-					UID:                imageBuild.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
+	svc := &corev1.Service{}
+	err := r.Get(ctx, types.NamespacedName{Name: svcName, Namespace: imageBuild.Namespace}, svc)
+	if errors.IsNotFound(err) {
+		log.Info("Creating artifact service", "name", svcName)
+		svc = &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      svcName,
+				Namespace: imageBuild.Namespace,
+				Labels:    artifactPod.Labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         imageBuild.APIVersion,
+						Kind:               imageBuild.Kind,
+						Name:               imageBuild.Name,
+						UID:                imageBuild.UID,
+						Controller:         ptr.To(true),
+						BlockOwnerDeletion: ptr.To(true),
+					},
 				},
 			},
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: artifactPod.Labels,
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "http",
-					Port:       8080,
-					TargetPort: intstr.FromInt(8080),
+			Spec: corev1.ServiceSpec{
+				Selector: artifactPod.Labels,
+				Ports: []corev1.ServicePort{
+					{
+						Name:       "http",
+						Port:       8080,
+						TargetPort: intstr.FromInt(8080),
+					},
 				},
 			},
-		},
-	}
-	if err := r.Create(ctx, svc); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create service: %w", err)
+		}
+		if err := r.Create(ctx, svc); err != nil {
+			return fmt.Errorf("failed to create service: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check for existing service: %w", err)
+	} else {
+		log.Info("Artifact service already exists", "name", svcName)
 	}
 
 	routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
-	route := &routev1.Route{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      routeName,
-			Namespace: imageBuild.Namespace,
-			Labels:    artifactPod.Labels,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         imageBuild.APIVersion,
-					Kind:               imageBuild.Kind,
-					Name:               imageBuild.Name,
-					UID:                imageBuild.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
+	route := &routev1.Route{}
+	err = r.Get(ctx, types.NamespacedName{Name: routeName, Namespace: imageBuild.Namespace}, route)
+	if errors.IsNotFound(err) {
+		log.Info("Creating artifact route", "name", routeName)
+		route = &routev1.Route{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      routeName,
+				Namespace: imageBuild.Namespace,
+				Labels:    artifactPod.Labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         imageBuild.APIVersion,
+						Kind:               imageBuild.Kind,
+						Name:               imageBuild.Name,
+						UID:                imageBuild.UID,
+						Controller:         ptr.To(true),
+						BlockOwnerDeletion: ptr.To(true),
+					},
 				},
 			},
-		},
-		Spec: routev1.RouteSpec{
-			To: routev1.RouteTargetReference{
-				Kind: "Service",
-				Name: svc.Name,
+			Spec: routev1.RouteSpec{
+				To: routev1.RouteTargetReference{
+					Kind: "Service",
+					Name: svcName,
+				},
+				Port: &routev1.RoutePort{
+					TargetPort: intstr.FromInt(8080),
+				},
 			},
-			Port: &routev1.RoutePort{
-				TargetPort: intstr.FromInt(8080),
-			},
-		},
-	}
-	if err := r.Create(ctx, route); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create route: %w", err)
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	err := wait.PollUntilContextTimeout(timeoutCtx, time.Second, 30*time.Second, false, func(ctx context.Context) (bool, error) {
-		if err := r.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
-			return false, nil
 		}
-		return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get route hostname: %w", err)
+		if err := r.Create(ctx, route); err != nil {
+			return fmt.Errorf("failed to create route: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check for existing route: %w", err)
+	} else {
+		log.Info("Artifact route already exists", "name", routeName)
 	}
 
 	return nil

@@ -217,51 +217,53 @@ func runBuild(cmd *cobra.Command, args []string) {
 }
 
 func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
-	localFileRefs, err := findLocalFileReferences(string(manifestData))
-	if err != nil {
-		return nil, fmt.Errorf("error in manifest file references: %w", err)
-	}
+    localFileRefs, err := findLocalFileReferences(string(manifestData))
+    if err != nil {
+        return nil, fmt.Errorf("error in manifest file references: %w", err)
+    }
 
-	labels := map[string]string{
-		"app.kubernetes.io/managed-by":                 "caib",
-		"app.kubernetes.io/part-of":                    "automotive-dev",
-		"app.kubernetes.io/created-by":                 "caib-cli",
-		"automotive.sdv.cloud.redhat.com/distro":       distro,
-		"automotive.sdv.cloud.redhat.com/target":       target,
-		"automotive.sdv.cloud.redhat.com/architecture": architecture,
-	}
+    labels := map[string]string{
+        "app.kubernetes.io/managed-by":                 "caib",
+        "app.kubernetes.io/part-of":                    "automotive-dev",
+        "app.kubernetes.io/created-by":                 "caib-cli",
+        "automotive.sdv.cloud.redhat.com/distro":       distro,
+        "automotive.sdv.cloud.redhat.com/target":       target,
+        "automotive.sdv.cloud.redhat.com/architecture": architecture,
+    }
 
-	imageBuild := &automotivev1.ImageBuild{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-			Labels:    labels,
-		},
-		Spec: automotivev1.ImageBuildSpec{
-			Distro:                 distro,
-			Target:                 target,
-			Architecture:           architecture,
-			ExportFormat:           exportFormat,
-			Mode:                   mode,
-			AutomativeOSBuildImage: osbuildImage,
-			StorageClass:           storageClass,
-			ServeArtifact:          waitForBuild && download,
-			ServeExpiryHours:       24,
-			ManifestConfigMap:      configMapName,
-			InputFilesServer:       len(localFileRefs) > 0,
-			ExposeRoute:            exposeRoute,
-		},
-	}
+    serveArtifact := waitForBuild && (download || exposeRoute)
 
-	if err := c.Create(ctx, imageBuild); err != nil {
-		return nil, fmt.Errorf("error creating ImageBuild: %w", err)
-	}
+    imageBuild := &automotivev1.ImageBuild{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      name,
+            Namespace: ns,
+            Labels:    labels,
+        },
+        Spec: automotivev1.ImageBuildSpec{
+            Distro:                 distro,
+            Target:                 target,
+            Architecture:           architecture,
+            ExportFormat:           exportFormat,
+            Mode:                   mode,
+            AutomativeOSBuildImage: osbuildImage,
+            StorageClass:           storageClass,
+            ServeArtifact:          serveArtifact,
+            ServeExpiryHours:       24,
+            ManifestConfigMap:      configMapName,
+            InputFilesServer:       len(localFileRefs) > 0,
+            ExposeRoute:            exposeRoute,
+        },
+    }
 
-	if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
-		return nil, err
-	}
+    if err := c.Create(ctx, imageBuild); err != nil {
+        return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+    }
 
-	return imageBuild, nil
+    if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
+        return nil, err
+    }
+
+    return imageBuild, nil
 }
 
 func initializeBuildClient() (client.Client, error) {
@@ -371,28 +373,52 @@ func processFileUploads(ctx context.Context, c client.Client, ns, buildName stri
 }
 
 func handleBuildCompletion(c client.Client, imageBuild *automotivev1.ImageBuild) error {
-	fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n",
-		imageBuild.Name, timeout)
+    fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n",
+        imageBuild.Name, timeout)
 
-	completeBuild, err := waitForBuildCompletion(c, imageBuild.Name,
-		imageBuild.Namespace, timeout)
-	if err != nil {
-		return fmt.Errorf("error waiting for build: %w", err)
-	}
+    completeBuild, err := waitForBuildCompletion(c, imageBuild.Name,
+        imageBuild.Namespace, timeout)
+    if err != nil {
+        return fmt.Errorf("error waiting for build: %w", err)
+    }
 
-	if download && completeBuild.Status.Phase == "Completed" {
-		if exposeRoute {
-			fmt.Println("Waiting for artifact URL to be available...")
-			completeBuild, err = waitForArtifactURL(c, completeBuild.Name, completeBuild.Namespace)
-			if err != nil {
-				fmt.Printf("Warning: %v\n", err)
-			}
-		}
+    if completeBuild.Status.Phase == "Completed" {
+        if exposeRoute {
+            fmt.Println("Waiting for artifact URL to be available...")
+            completeBuild, err = waitForArtifactURL(c, completeBuild.Name, completeBuild.Namespace)
+            if err != nil {
+                fmt.Printf("Warning: %v\n", err)
+            } else if completeBuild.Status.ArtifactURL != "" {
+                artifactFileName := completeBuild.Status.ArtifactFileName
+                if artifactFileName == "" {
+                    var fileExtension string
+                    switch completeBuild.Spec.ExportFormat {
+                    case "image":
+                        fileExtension = ".raw"
+                    case "qcow2":
+                        fileExtension = ".qcow2"
+                    default:
+                        fileExtension = fmt.Sprintf(".%s", completeBuild.Spec.ExportFormat)
+                    }
+                    artifactFileName = fmt.Sprintf("%s-%s%s",
+                        completeBuild.Spec.Distro,
+                        completeBuild.Spec.Target,
+                        fileExtension)
+                }
 
-		downloadArtifacts(completeBuild)
-	}
-	return nil
+                fmt.Printf("Artifact available for download at: %s\n",
+                    completeBuild.Status.ArtifactURL+"/workspace/shared/"+artifactFileName)
+            }
+        }
+
+        if download {
+            downloadArtifacts(completeBuild)
+        }
+    }
+
+    return nil
 }
+
 
 func handleError(err error) {
 	fmt.Printf("Error: %v\n", err)
@@ -715,136 +741,127 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 }
 
 func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
-	const outputDir = "/tmp/artifacts"
+    if outputDir == "" {
+        outputDir = "./output"
+    }
 
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		fmt.Printf("Error creating output directory: %v\n", err)
-		return
-	}
+    if err := os.MkdirAll(outputDir, 0755); err != nil {
+        fmt.Printf("Error creating output directory: %v\n", err)
+        return
+    }
 
-	artifactFileName := imageBuild.Status.ArtifactFileName
-	if artifactFileName == "" {
-		var fileExtension string
-		switch imageBuild.Spec.ExportFormat {
-		case "image":
-			fileExtension = ".raw"
-		case "qcow2":
-			fileExtension = ".qcow2"
-		default:
-			fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
-		}
-		artifactFileName = fmt.Sprintf("%s-%s%s",
-			imageBuild.Spec.Distro,
-			imageBuild.Spec.Target,
-			fileExtension)
-	}
+    artifactFileName := imageBuild.Status.ArtifactFileName
+    if artifactFileName == "" {
+        var fileExtension string
+        switch imageBuild.Spec.ExportFormat {
+        case "image":
+            fileExtension = ".raw"
+        case "qcow2":
+            fileExtension = ".qcow2"
+        default:
+            fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
+        }
+        artifactFileName = fmt.Sprintf("%s-%s%s",
+            imageBuild.Spec.Distro,
+            imageBuild.Spec.Target,
+            fileExtension)
+    }
 
-	ctx := context.Background()
+    ctx := context.Background()
+    c, err := getClient()
+    if err != nil {
+        fmt.Printf("Error creating client: %v\n", err)
+        return
+    }
 
-	c, err := getClient()
-	if err != nil {
-		fmt.Printf("Error creating client: %v\n", err)
-		return
-	}
+    backoff := wait.Backoff{
+        Steps:    5,
+        Duration: 5 * time.Second,
+        Factor:   2.0,
+        Jitter:   0.1,
+        Cap:      60 * time.Second,
+    }
 
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 5 * time.Second,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Cap:      60 * time.Second,
-	}
+    var artifactPod *corev1.Pod
+    findPodErr := wait.ExponentialBackoff(backoff, func() (bool, error) {
+        podList := &corev1.PodList{}
+        if err := c.List(ctx, podList,
+            client.InNamespace(imageBuild.Namespace),
+            client.MatchingLabels{
+                "automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
+                "app.kubernetes.io/name":                          "artifact-pod",
+            }); err != nil {
+            fmt.Printf("Error listing pods (will retry): %v\n", err)
+            return false, nil
+        }
 
-	var artifactPod *corev1.Pod
-	findPodErr := wait.ExponentialBackoff(backoff, func() (bool, error) {
-		podList := &corev1.PodList{}
-		if err := c.List(ctx, podList,
-			client.InNamespace(imageBuild.Namespace),
-			client.MatchingLabels{
-				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-				"app.kubernetes.io/name":                          "artifact-pod",
-			}); err != nil {
-			fmt.Printf("Error listing pods (will retry): %v\n", err)
-			return false, nil
-		}
+        for i := range podList.Items {
+            pod := &podList.Items[i]
+            if pod.Status.Phase == corev1.PodRunning {
+                for _, status := range pod.Status.ContainerStatuses {
+                    if status.Name == "fileserver" && status.Ready {
+                        artifactPod = pod
+                        return true, nil
+                    }
+                }
+            }
+        }
 
-		for i := range podList.Items {
-			pod := &podList.Items[i]
-			if pod.Status.Phase == corev1.PodRunning {
-				for _, status := range pod.Status.ContainerStatuses {
-					if status.Name == "fileserver" && status.Ready {
-						artifactPod = pod
-						return true, nil
-					}
-				}
-			}
-		}
+        fmt.Println("No ready artifact pod found yet, waiting...")
+        return false, nil
+    })
 
-		fmt.Println("No ready artifact pod found yet, waiting...")
-		return false, nil
-	})
+    if findPodErr != nil {
+        fmt.Printf("Failed to find ready artifact pod: %v\n", findPodErr)
+        return
+    }
 
-	if findPodErr != nil {
-		fmt.Printf("Failed to find ready artifact pod: %v\n", findPodErr)
-		return
-	}
+    containerName := "fileserver"
+    sourcePath := "/workspace/shared/" + artifactFileName
+    outputPath := filepath.Join(outputDir, artifactFileName)
 
-	// If ExposeArtifacts is true, print the route URL
-	if exposeRoute {
-		exposedURL := imageBuild.Status.ArtifactURL
-		if exposedURL == "" {
-			fmt.Println("No ArtifactURL found in ImageBuild status")
-			return
-		}
-		fmt.Printf("Artifacts are available for download at route: %s\n", exposedURL+"/workspace/shared/"+artifactFileName)
-	}
+    fmt.Printf("Downloading artifact from pod %s\n", artifactPod.Name)
+    fmt.Printf("Pod path: %s\n", sourcePath)
+    fmt.Printf("Saving to: %s\n", outputPath)
 
-	containerName := "fileserver"
-	sourcePath := "/workspace/shared/" + artifactFileName
-	outputPath := filepath.Join(outputDir, artifactFileName)
+    downloadBackoff := wait.Backoff{
+        Steps:    3,
+        Duration: 5 * time.Second,
+        Factor:   2.0,
+        Jitter:   0.1,
+        Cap:      30 * time.Second,
+    }
 
-	fmt.Printf("Downloading artifact from pod %s\n", artifactPod.Name)
-	fmt.Printf("Pod path: %s\n", sourcePath)
-	fmt.Printf("Saving to: %s\n", outputPath)
+    downloadErr := wait.ExponentialBackoff(downloadBackoff, func() (bool, error) {
+        freshConfig, err := getRESTConfig()
+        if err != nil {
+            fmt.Printf("Failed to get REST config (will retry): %v\n", err)
+            return false, nil
+        }
 
-	downloadBackoff := wait.Backoff{
-		Steps:    3,
-		Duration: 5 * time.Second,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Cap:      30 * time.Second,
-	}
+        err = copyFile(freshConfig, imageBuild.Namespace, artifactPod.Name, containerName, outputPath, sourcePath, false)
+        if err != nil {
+            fmt.Printf("Download attempt failed (will retry): %v\n", err)
+            return false, nil
+        }
+        return true, nil
+    })
 
-	downloadErr := wait.ExponentialBackoff(downloadBackoff, func() (bool, error) {
-		freshConfig, err := getRESTConfig()
-		if err != nil {
-			fmt.Printf("Failed to get REST config (will retry): %v\n", err)
-			return false, nil
-		}
+    if downloadErr != nil {
+        fmt.Printf("Failed to download artifact after multiple retries: %v\n", downloadErr)
+        if _, err := os.Stat(outputPath); err == nil {
+            os.Remove(outputPath)
+            fmt.Println("Removed incomplete download file")
+        }
+        return
+    }
 
-		err = copyFile(freshConfig, imageBuild.Namespace, artifactPod.Name, containerName, outputPath, sourcePath, false)
-		if err != nil {
-			fmt.Printf("Download attempt failed (will retry): %v\n", err)
-			return false, nil
-		}
-		return true, nil
-	})
-
-	if downloadErr != nil {
-		fmt.Printf("Failed to download artifact after multiple retries: %v\n", downloadErr)
-		if _, err := os.Stat(outputPath); err == nil {
-			os.Remove(outputPath)
-			fmt.Println("Removed incomplete download file")
-		}
-		return
-	}
-
-	if fileInfo, err := os.Stat(outputPath); err == nil {
-		fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
-		fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
-	} else {
-		fmt.Printf("Artifact downloaded but unable to get file size: %v\n", err)
-	}
+    if fileInfo, err := os.Stat(outputPath); err == nil {
+        fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
+        fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
+    } else {
+        fmt.Printf("Artifact downloaded but unable to get file size: %v\n", err)
+    }
 }
 
 func getRESTConfig() (*rest.Config, error) {
@@ -929,16 +946,36 @@ func runDownload(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	if exposeRoute {
+	if exposeRoute || cmd.Flags().Changed("route") {
 		exposedURL := imageBuild.Status.ArtifactURL
 		if exposedURL == "" {
 			fmt.Printf("No ArtifactURL found in ImageBuild status for %s\n", buildName)
 			os.Exit(1)
 		}
+
 		artifactFileName := imageBuild.Status.ArtifactFileName
-		fmt.Printf("Artifacts are available for download at: %s\n",
+		if artifactFileName == "" {
+			var fileExtension string
+			switch imageBuild.Spec.ExportFormat {
+			case "image":
+				fileExtension = ".raw"
+			case "qcow2":
+				fileExtension = ".qcow2"
+			default:
+				fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
+			}
+			artifactFileName = fmt.Sprintf("%s-%s%s",
+				imageBuild.Spec.Distro,
+				imageBuild.Spec.Target,
+				fileExtension)
+		}
+
+		fmt.Printf("Artifact available for download at: %s\n",
 			exposedURL+"/workspace/shared/"+artifactFileName)
-		return
+
+		if cmd.Flags().Changed("route") && !cmd.Flags().Changed("output-dir") {
+			return
+		}
 	}
 
 	downloadArtifacts(imageBuild)
