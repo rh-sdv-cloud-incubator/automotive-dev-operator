@@ -229,7 +229,7 @@ func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapN
 		"automotive.sdv.cloud.redhat.com/architecture": architecture,
 	}
 
-	serveArtifact := waitForBuild && (download || exposeRoute)
+	serveArtifact := (waitForBuild && download) || exposeRoute
 
 	imageBuild := &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
