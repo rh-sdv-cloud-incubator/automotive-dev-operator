@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	tektonclientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 
 	"gopkg.in/yaml.v3"
@@ -59,6 +61,7 @@ var (
 	download      bool
 	exposeRoute   bool
 	customDefs    []string
+	followLogs    bool
 )
 
 func main() {
@@ -85,23 +88,14 @@ func main() {
 		Run:   runList,
 	}
 
-	showCmd := &cobra.Command{
-		Use:   "show",
-		Short: "Show details of a specific ImageBuild",
-		Args:  cobra.ExactArgs(1),
-		Run:   runShow,
-	}
-
 	if home := homedir.HomeDir(); home != "" {
 		buildCmd.Flags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "path to the kubeconfig file")
 		downloadCmd.Flags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "path to the kubeconfig file")
 		listCmd.Flags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "path to the kubeconfig file")
-		showCmd.Flags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "path to the kubeconfig file")
 	} else {
 		buildCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig file")
 		downloadCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig file")
 		listCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig file")
-		showCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig file")
 	}
 
 	buildCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace to create the ImageBuild in")
@@ -119,6 +113,7 @@ func main() {
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
 	buildCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
+	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
@@ -129,9 +124,7 @@ func main() {
 
 	listCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace to list ImageBuilds from")
 
-	showCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace of the ImageBuild")
-
-	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd, showCmd)
+	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -209,7 +202,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
 
-	if waitForBuild {
+	if followLogs {
+		waitForBuild = true // follow implies wait
+		if err := streamBuildLogs(c, imageBuild); err != nil {
+			handleError(err)
+		}
+	} else if waitForBuild {
 		if err := handleBuildCompletion(c, imageBuild); err != nil {
 			handleError(err)
 		}
@@ -217,53 +215,53 @@ func runBuild(cmd *cobra.Command, args []string) {
 }
 
 func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapName string, manifestData []byte) (*automotivev1.ImageBuild, error) {
-    localFileRefs, err := findLocalFileReferences(string(manifestData))
-    if err != nil {
-        return nil, fmt.Errorf("error in manifest file references: %w", err)
-    }
+	localFileRefs, err := findLocalFileReferences(string(manifestData))
+	if err != nil {
+		return nil, fmt.Errorf("error in manifest file references: %w", err)
+	}
 
-    labels := map[string]string{
-        "app.kubernetes.io/managed-by":                 "caib",
-        "app.kubernetes.io/part-of":                    "automotive-dev",
-        "app.kubernetes.io/created-by":                 "caib-cli",
-        "automotive.sdv.cloud.redhat.com/distro":       distro,
-        "automotive.sdv.cloud.redhat.com/target":       target,
-        "automotive.sdv.cloud.redhat.com/architecture": architecture,
-    }
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by":                 "caib",
+		"app.kubernetes.io/part-of":                    "automotive-dev",
+		"app.kubernetes.io/created-by":                 "caib-cli",
+		"automotive.sdv.cloud.redhat.com/distro":       distro,
+		"automotive.sdv.cloud.redhat.com/target":       target,
+		"automotive.sdv.cloud.redhat.com/architecture": architecture,
+	}
 
-    serveArtifact := waitForBuild && (download || exposeRoute)
+	serveArtifact := waitForBuild && (download || exposeRoute)
 
-    imageBuild := &automotivev1.ImageBuild{
-        ObjectMeta: metav1.ObjectMeta{
-            Name:      name,
-            Namespace: ns,
-            Labels:    labels,
-        },
-        Spec: automotivev1.ImageBuildSpec{
-            Distro:                 distro,
-            Target:                 target,
-            Architecture:           architecture,
-            ExportFormat:           exportFormat,
-            Mode:                   mode,
-            AutomativeOSBuildImage: osbuildImage,
-            StorageClass:           storageClass,
-            ServeArtifact:          serveArtifact,
-            ServeExpiryHours:       24,
-            ManifestConfigMap:      configMapName,
-            InputFilesServer:       len(localFileRefs) > 0,
-            ExposeRoute:            exposeRoute,
-        },
-    }
+	imageBuild := &automotivev1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Spec: automotivev1.ImageBuildSpec{
+			Distro:                 distro,
+			Target:                 target,
+			Architecture:           architecture,
+			ExportFormat:           exportFormat,
+			Mode:                   mode,
+			AutomativeOSBuildImage: osbuildImage,
+			StorageClass:           storageClass,
+			ServeArtifact:          serveArtifact,
+			ServeExpiryHours:       24,
+			ManifestConfigMap:      configMapName,
+			InputFilesServer:       len(localFileRefs) > 0,
+			ExposeRoute:            exposeRoute,
+		},
+	}
 
-    if err := c.Create(ctx, imageBuild); err != nil {
-        return nil, fmt.Errorf("error creating ImageBuild: %w", err)
-    }
+	if err := c.Create(ctx, imageBuild); err != nil {
+		return nil, fmt.Errorf("error creating ImageBuild: %w", err)
+	}
 
-    if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
-        return nil, err
-    }
+	if err := updateConfigMapOwnership(ctx, c, configMapName, ns, imageBuild); err != nil {
+		return nil, err
+	}
 
-    return imageBuild, nil
+	return imageBuild, nil
 }
 
 func initializeBuildClient() (client.Client, error) {
@@ -373,52 +371,51 @@ func processFileUploads(ctx context.Context, c client.Client, ns, buildName stri
 }
 
 func handleBuildCompletion(c client.Client, imageBuild *automotivev1.ImageBuild) error {
-    fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n",
-        imageBuild.Name, timeout)
+	fmt.Printf("Waiting for build %s to complete (timeout: %d minutes)...\n",
+		imageBuild.Name, timeout)
 
-    completeBuild, err := waitForBuildCompletion(c, imageBuild.Name,
-        imageBuild.Namespace, timeout)
-    if err != nil {
-        return fmt.Errorf("error waiting for build: %w", err)
-    }
+	completeBuild, err := waitForBuildCompletion(c, imageBuild.Name,
+		imageBuild.Namespace, timeout)
+	if err != nil {
+		return fmt.Errorf("error waiting for build: %w", err)
+	}
 
-    if completeBuild.Status.Phase == "Completed" {
-        if exposeRoute {
-            fmt.Println("Waiting for artifact URL to be available...")
-            completeBuild, err = waitForArtifactURL(c, completeBuild.Name, completeBuild.Namespace)
-            if err != nil {
-                fmt.Printf("Warning: %v\n", err)
-            } else if completeBuild.Status.ArtifactURL != "" {
-                artifactFileName := completeBuild.Status.ArtifactFileName
-                if artifactFileName == "" {
-                    var fileExtension string
-                    switch completeBuild.Spec.ExportFormat {
-                    case "image":
-                        fileExtension = ".raw"
-                    case "qcow2":
-                        fileExtension = ".qcow2"
-                    default:
-                        fileExtension = fmt.Sprintf(".%s", completeBuild.Spec.ExportFormat)
-                    }
-                    artifactFileName = fmt.Sprintf("%s-%s%s",
-                        completeBuild.Spec.Distro,
-                        completeBuild.Spec.Target,
-                        fileExtension)
-                }
+	if completeBuild.Status.Phase == "Completed" {
+		if exposeRoute {
+			fmt.Println("Waiting for artifact URL to be available...")
+			completeBuild, err = waitForArtifactURL(c, completeBuild.Name, completeBuild.Namespace)
+			if err != nil {
+				fmt.Printf("Warning: %v\n", err)
+			} else if completeBuild.Status.ArtifactURL != "" {
+				artifactFileName := completeBuild.Status.ArtifactFileName
+				if artifactFileName == "" {
+					var fileExtension string
+					switch completeBuild.Spec.ExportFormat {
+					case "image":
+						fileExtension = ".raw"
+					case "qcow2":
+						fileExtension = ".qcow2"
+					default:
+						fileExtension = fmt.Sprintf(".%s", completeBuild.Spec.ExportFormat)
+					}
+					artifactFileName = fmt.Sprintf("%s-%s%s",
+						completeBuild.Spec.Distro,
+						completeBuild.Spec.Target,
+						fileExtension)
+				}
 
-                fmt.Printf("Artifact available for download at: %s\n",
-                    completeBuild.Status.ArtifactURL+"/workspace/shared/"+artifactFileName)
-            }
-        }
+				fmt.Printf("Artifact available for download at: %s\n",
+					completeBuild.Status.ArtifactURL+"/workspace/shared/"+artifactFileName)
+			}
+		}
 
-        if download {
-            downloadArtifacts(completeBuild)
-        }
-    }
+		if download {
+			downloadArtifacts(completeBuild)
+		}
+	}
 
-    return nil
+	return nil
 }
-
 
 func handleError(err error) {
 	fmt.Printf("Error: %v\n", err)
@@ -741,127 +738,127 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 }
 
 func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
-    if outputDir == "" {
-        outputDir = "./output"
-    }
+	if outputDir == "" {
+		outputDir = "./output"
+	}
 
-    if err := os.MkdirAll(outputDir, 0755); err != nil {
-        fmt.Printf("Error creating output directory: %v\n", err)
-        return
-    }
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		fmt.Printf("Error creating output directory: %v\n", err)
+		return
+	}
 
-    artifactFileName := imageBuild.Status.ArtifactFileName
-    if artifactFileName == "" {
-        var fileExtension string
-        switch imageBuild.Spec.ExportFormat {
-        case "image":
-            fileExtension = ".raw"
-        case "qcow2":
-            fileExtension = ".qcow2"
-        default:
-            fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
-        }
-        artifactFileName = fmt.Sprintf("%s-%s%s",
-            imageBuild.Spec.Distro,
-            imageBuild.Spec.Target,
-            fileExtension)
-    }
+	artifactFileName := imageBuild.Status.ArtifactFileName
+	if artifactFileName == "" {
+		var fileExtension string
+		switch imageBuild.Spec.ExportFormat {
+		case "image":
+			fileExtension = ".raw"
+		case "qcow2":
+			fileExtension = ".qcow2"
+		default:
+			fileExtension = fmt.Sprintf(".%s", imageBuild.Spec.ExportFormat)
+		}
+		artifactFileName = fmt.Sprintf("%s-%s%s",
+			imageBuild.Spec.Distro,
+			imageBuild.Spec.Target,
+			fileExtension)
+	}
 
-    ctx := context.Background()
-    c, err := getClient()
-    if err != nil {
-        fmt.Printf("Error creating client: %v\n", err)
-        return
-    }
+	ctx := context.Background()
+	c, err := getClient()
+	if err != nil {
+		fmt.Printf("Error creating client: %v\n", err)
+		return
+	}
 
-    backoff := wait.Backoff{
-        Steps:    5,
-        Duration: 5 * time.Second,
-        Factor:   2.0,
-        Jitter:   0.1,
-        Cap:      60 * time.Second,
-    }
+	backoff := wait.Backoff{
+		Steps:    5,
+		Duration: 5 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Cap:      60 * time.Second,
+	}
 
-    var artifactPod *corev1.Pod
-    findPodErr := wait.ExponentialBackoff(backoff, func() (bool, error) {
-        podList := &corev1.PodList{}
-        if err := c.List(ctx, podList,
-            client.InNamespace(imageBuild.Namespace),
-            client.MatchingLabels{
-                "automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
-                "app.kubernetes.io/name":                          "artifact-pod",
-            }); err != nil {
-            fmt.Printf("Error listing pods (will retry): %v\n", err)
-            return false, nil
-        }
+	var artifactPod *corev1.Pod
+	findPodErr := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		podList := &corev1.PodList{}
+		if err := c.List(ctx, podList,
+			client.InNamespace(imageBuild.Namespace),
+			client.MatchingLabels{
+				"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
+				"app.kubernetes.io/name":                          "artifact-pod",
+			}); err != nil {
+			fmt.Printf("Error listing pods (will retry): %v\n", err)
+			return false, nil
+		}
 
-        for i := range podList.Items {
-            pod := &podList.Items[i]
-            if pod.Status.Phase == corev1.PodRunning {
-                for _, status := range pod.Status.ContainerStatuses {
-                    if status.Name == "fileserver" && status.Ready {
-                        artifactPod = pod
-                        return true, nil
-                    }
-                }
-            }
-        }
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Status.Phase == corev1.PodRunning {
+				for _, status := range pod.Status.ContainerStatuses {
+					if status.Name == "fileserver" && status.Ready {
+						artifactPod = pod
+						return true, nil
+					}
+				}
+			}
+		}
 
-        fmt.Println("No ready artifact pod found yet, waiting...")
-        return false, nil
-    })
+		fmt.Println("No ready artifact pod found yet, waiting...")
+		return false, nil
+	})
 
-    if findPodErr != nil {
-        fmt.Printf("Failed to find ready artifact pod: %v\n", findPodErr)
-        return
-    }
+	if findPodErr != nil {
+		fmt.Printf("Failed to find ready artifact pod: %v\n", findPodErr)
+		return
+	}
 
-    containerName := "fileserver"
-    sourcePath := "/workspace/shared/" + artifactFileName
-    outputPath := filepath.Join(outputDir, artifactFileName)
+	containerName := "fileserver"
+	sourcePath := "/workspace/shared/" + artifactFileName
+	outputPath := filepath.Join(outputDir, artifactFileName)
 
-    fmt.Printf("Downloading artifact from pod %s\n", artifactPod.Name)
-    fmt.Printf("Pod path: %s\n", sourcePath)
-    fmt.Printf("Saving to: %s\n", outputPath)
+	fmt.Printf("Downloading artifact from pod %s\n", artifactPod.Name)
+	fmt.Printf("Pod path: %s\n", sourcePath)
+	fmt.Printf("Saving to: %s\n", outputPath)
 
-    downloadBackoff := wait.Backoff{
-        Steps:    3,
-        Duration: 5 * time.Second,
-        Factor:   2.0,
-        Jitter:   0.1,
-        Cap:      30 * time.Second,
-    }
+	downloadBackoff := wait.Backoff{
+		Steps:    3,
+		Duration: 5 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Cap:      30 * time.Second,
+	}
 
-    downloadErr := wait.ExponentialBackoff(downloadBackoff, func() (bool, error) {
-        freshConfig, err := getRESTConfig()
-        if err != nil {
-            fmt.Printf("Failed to get REST config (will retry): %v\n", err)
-            return false, nil
-        }
+	downloadErr := wait.ExponentialBackoff(downloadBackoff, func() (bool, error) {
+		freshConfig, err := getRESTConfig()
+		if err != nil {
+			fmt.Printf("Failed to get REST config (will retry): %v\n", err)
+			return false, nil
+		}
 
-        err = copyFile(freshConfig, imageBuild.Namespace, artifactPod.Name, containerName, outputPath, sourcePath, false)
-        if err != nil {
-            fmt.Printf("Download attempt failed (will retry): %v\n", err)
-            return false, nil
-        }
-        return true, nil
-    })
+		err = copyFile(freshConfig, imageBuild.Namespace, artifactPod.Name, containerName, outputPath, sourcePath, false)
+		if err != nil {
+			fmt.Printf("Download attempt failed (will retry): %v\n", err)
+			return false, nil
+		}
+		return true, nil
+	})
 
-    if downloadErr != nil {
-        fmt.Printf("Failed to download artifact after multiple retries: %v\n", downloadErr)
-        if _, err := os.Stat(outputPath); err == nil {
-            os.Remove(outputPath)
-            fmt.Println("Removed incomplete download file")
-        }
-        return
-    }
+	if downloadErr != nil {
+		fmt.Printf("Failed to download artifact after multiple retries: %v\n", downloadErr)
+		if _, err := os.Stat(outputPath); err == nil {
+			os.Remove(outputPath)
+			fmt.Println("Removed incomplete download file")
+		}
+		return
+	}
 
-    if fileInfo, err := os.Stat(outputPath); err == nil {
-        fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
-        fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
-    } else {
-        fmt.Printf("Artifact downloaded but unable to get file size: %v\n", err)
-    }
+	if fileInfo, err := os.Stat(outputPath); err == nil {
+		fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
+		fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
+	} else {
+		fmt.Printf("Artifact downloaded but unable to get file size: %v\n", err)
+	}
 }
 
 func getRESTConfig() (*rest.Config, error) {
@@ -1010,50 +1007,6 @@ func runList(cmd *cobra.Command, args []string) {
 			build.Spec.Distro,
 			build.Spec.Target,
 			createdTime)
-	}
-}
-
-func runShow(cmd *cobra.Command, args []string) {
-	ctx := context.Background()
-
-	c, err := getClient()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	buildName := args[0]
-
-	build := &automotivev1.ImageBuild{}
-	if err := c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, build); err != nil {
-		fmt.Printf("Error getting ImageBuild %s: %v\n", buildName, err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Name:        %s\n", build.Name)
-	fmt.Printf("Namespace:   %s\n", build.Namespace)
-	fmt.Printf("Created:     %s\n", build.CreationTimestamp.Format(time.RFC3339))
-	fmt.Printf("Status:      %s\n", build.Status.Phase)
-	fmt.Printf("Message:     %s\n", build.Status.Message)
-
-	fmt.Printf("\nBuild Specification:\n")
-	fmt.Printf("  Distro:              %s\n", build.Spec.Distro)
-	fmt.Printf("  Target:              %s\n", build.Spec.Target)
-	fmt.Printf("  Architecture:        %s\n", build.Spec.Architecture)
-	fmt.Printf("  Export Format:       %s\n", build.Spec.ExportFormat)
-	fmt.Printf("  Mode:                %s\n", build.Spec.Mode)
-	fmt.Printf("  Manifest ConfigMap:      %s\n", build.Spec.ManifestConfigMap)
-	fmt.Printf("  OSBuild Image:       %s\n", build.Spec.AutomativeOSBuildImage)
-	fmt.Printf("  Storage Class:       %s\n", build.Spec.StorageClass)
-	fmt.Printf("  Serve Artifact:      %v\n", build.Spec.ServeArtifact)
-	fmt.Printf("  Serve Expiry Hours:  %d\n", build.Spec.ServeExpiryHours)
-	fmt.Printf("  Server Route Expose: %v\n", build.Spec.ExposeRoute)
-
-	if build.Status.Phase == "Completed" {
-		fmt.Printf("\nArtifacts:\n")
-		fmt.Printf("  PVC Name:       %s\n", build.Status.PVCName)
-		fmt.Printf("  Artifact Path:  %s\n", build.Status.ArtifactPath)
-		fmt.Printf("  File Name:      %s\n", build.Status.ArtifactFileName)
 	}
 }
 
@@ -1219,33 +1172,220 @@ func waitForArtifactURL(c client.Client, name, namespace string) (*automotivev1.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	var updatedBuild *automotivev1.ImageBuild
+	return waitForResource(ctx, 5*time.Second, 2*time.Minute, "waiting for artifact URL",
+		func(ctx context.Context) (*automotivev1.ImageBuild, bool, error) {
+			build := &automotivev1.ImageBuild{}
+			if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+				return nil, false, err
+			}
+
+			return build, build.Status.ArtifactURL != "", nil
+		})
+}
+
+func waitForResource[T any](ctx context.Context, interval, timeout time.Duration, message string, checkFn func(ctx context.Context) (T, bool, error)) (T, error) {
+	var result T
+	var zero T
 
 	err := wait.PollUntilContextTimeout(
 		ctx,
-		5*time.Second,
-		2*time.Minute,
+		interval,
+		timeout,
 		false,
 		func(ctx context.Context) (bool, error) {
-			build := &automotivev1.ImageBuild{}
-			if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+			var done bool
+			var err error
+
+			result, done, err = checkFn(ctx)
+			if err != nil {
 				return false, err
 			}
 
-			updatedBuild = build
-
-			if build.Status.ArtifactURL != "" {
-				return true, nil
+			if !done && message != "" {
+				fmt.Print(".")
 			}
 
-			fmt.Print(".")
-			return false, nil
+			return done, nil
 		})
 
-	fmt.Println()
-	if err != nil {
-		return updatedBuild, fmt.Errorf("timed out waiting for artifact URL: %w", err)
+	if message != "" {
+		fmt.Println()
 	}
 
-	return updatedBuild, nil
+	if err != nil {
+		return zero, fmt.Errorf("%s: %w", message, err)
+	}
+
+	return result, nil
+}
+
+func streamBuildLogs(c client.Client, imageBuild *automotivev1.ImageBuild) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Minute)
+	defer cancel()
+
+	fmt.Printf("Waiting for build %s to start and streaming logs...\n", imageBuild.Name)
+
+	taskRunName, err := waitForResource(ctx, 2*time.Second, 2*time.Minute, "",
+		func(ctx context.Context) (string, bool, error) {
+			ib := &automotivev1.ImageBuild{}
+			if err := c.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, ib); err != nil {
+				return "", false, err
+			}
+
+			return ib.Status.TaskRunName, ib.Status.TaskRunName != "", nil
+		})
+
+	if err != nil {
+		return fmt.Errorf("error waiting for build TaskRun to be created: %w", err)
+	}
+
+	fmt.Printf("Build started with TaskRun: %s\n", taskRunName)
+
+	tektonClient, err := getTektonClient()
+	if err != nil {
+		return fmt.Errorf("failed to create Tekton client: %w", err)
+	}
+
+	podName, err := waitForResource(ctx, 2*time.Second, 2*time.Minute, "",
+		func(ctx context.Context) (string, bool, error) {
+			tr, err := tektonClient.TektonV1().TaskRuns(imageBuild.Namespace).Get(ctx, taskRunName, metav1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return "", false, nil
+				}
+				return "", false, err
+			}
+
+			return tr.Status.PodName, tr.Status.PodName != "", nil
+		})
+
+	if err != nil {
+		return fmt.Errorf("error waiting for build pod: %w", err)
+	}
+
+	config, err := getRESTConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get REST config: %w", err)
+	}
+
+	kubeClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	fmt.Println("Waiting for build pod to be ready...")
+
+	_, err = waitForResource(ctx, 2*time.Second, 2*time.Minute, "",
+		func(ctx context.Context) (*corev1.Pod, bool, error) {
+			pod, err := kubeClient.CoreV1().Pods(imageBuild.Namespace).Get(ctx, podName, metav1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+
+			return pod, pod.Status.Phase == corev1.PodRunning, nil
+		})
+
+	if err != nil {
+		return fmt.Errorf("error waiting for build pod to start running: %w", err)
+	}
+
+	pod, err := kubeClient.CoreV1().Pods(imageBuild.Namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("error getting pod details: %w", err)
+	}
+
+	var stepContainers []string
+	for _, container := range pod.Spec.Containers {
+		if strings.HasPrefix(container.Name, "step-") {
+			stepContainers = append(stepContainers, container.Name)
+		}
+	}
+
+	if len(stepContainers) == 0 {
+		fmt.Println("Warning: No step containers found in pod")
+		stepContainers = []string{
+			"step-find-manifest-file",
+			"step-build-image",
+		}
+	}
+
+	fmt.Printf("Found %d step containers\n", len(stepContainers))
+
+	for _, containerName := range stepContainers {
+		fmt.Printf("Waiting for %s container to start...\n", containerName)
+
+		_, err = waitForResource(ctx, 2*time.Second, 30*time.Second, "",
+			func(ctx context.Context) (*corev1.Pod, bool, error) {
+				pod, err := kubeClient.CoreV1().Pods(imageBuild.Namespace).Get(ctx, podName, metav1.GetOptions{})
+				if err != nil {
+					return nil, false, err
+				}
+
+				for _, status := range pod.Status.ContainerStatuses {
+					if status.Name == containerName && (status.State.Running != nil || status.State.Terminated != nil) {
+						return pod, true, nil
+					}
+				}
+
+				return pod, false, nil
+			})
+
+		if err != nil {
+			fmt.Printf("Warning: Container %s not ready in time, trying to get logs anyway\n", containerName)
+		}
+
+		if err := streamContainerLogs(ctx, kubeClient, imageBuild.Namespace, podName, containerName); err != nil {
+			fmt.Printf("Warning: %v\n", err)
+		}
+	}
+
+	return handleBuildCompletion(c, imageBuild)
+}
+
+func streamContainerLogs(ctx context.Context, kubeClient *kubernetes.Clientset, namespace, podName, containerName string) error {
+	req := kubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: containerName,
+		Follow:    true,
+	})
+
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return fmt.Errorf("couldn't stream logs from %s container: %v", containerName, err)
+	}
+	defer stream.Close()
+
+	stepName := containerName
+	if strings.HasPrefix(containerName, "step-") {
+		stepName = strings.TrimPrefix(containerName, "step-")
+	}
+
+	fmt.Printf("\n===== Logs from %s =====\n\n", stepName)
+
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+
+	if scanner.Err() != nil && ctx.Err() == nil {
+		return fmt.Errorf("error reading logs: %v", scanner.Err())
+	}
+
+	return nil
+}
+
+func getTektonClient() (*tektonclientset.Clientset, error) {
+	config, err := getRESTConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get REST config: %w", err)
+	}
+
+	tektonClient, err := tektonclientset.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Tekton client: %w", err)
+	}
+
+	return tektonClient, nil
 }
