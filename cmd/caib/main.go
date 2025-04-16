@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -41,6 +42,19 @@ import (
 
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 )
+
+type progressReporter struct {
+	writer           io.Writer
+	progressCallback func(n int)
+}
+
+func (pr *progressReporter) Write(p []byte) (int, error) {
+	n, err := pr.writer.Write(p)
+	if pr.progressCallback != nil {
+		pr.progressCallback(n)
+	}
+	return n, err
+}
 
 var (
 	kubeconfig    string
@@ -541,7 +555,6 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 	}
 
 	if toPod {
-		// Upload code remains largely the same
 		destDir := filepath.Dir(podPath)
 		mkdirCmd := []string{"mkdir", "-p", destDir}
 		if err := execInPod(configCopy, namespace, podName, containerName, mkdirCmd); err != nil {
@@ -634,7 +647,8 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 			return fmt.Errorf("exec error: %v, stderr: %s", err, stderr.String())
 		}
 	} else {
-		sizeCmd := []string{"stat", "-c", "%s", podPath}
+		isPathDirCmd := []string{"sh", "-c", fmt.Sprintf("if [ -d '%s' ]; then echo 'directory'; elif [ -f '%s' ]; then echo 'file'; else echo 'notfound'; fi", podPath, podPath)}
+
 		req := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
 			Name(podName).
@@ -642,7 +656,7 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 			SubResource("exec").
 			VersionedParams(&corev1.PodExecOptions{
 				Container: containerName,
-				Command:   sizeCmd,
+				Command:   isPathDirCmd,
 				Stdout:    true,
 				Stderr:    true,
 			}, scheme.ParameterCodec)
@@ -652,86 +666,259 @@ func copyFile(config *rest.Config, namespace, podName, containerName, localPath,
 			return fmt.Errorf("error creating SPDY executor: %w", err)
 		}
 
-		var sizeStdout, sizeStderr bytes.Buffer
+		var pathTypeStdout, pathTypeStderr bytes.Buffer
 		err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
-			Stdout: &sizeStdout,
-			Stderr: &sizeStderr,
+			Stdout: &pathTypeStdout,
+			Stderr: &pathTypeStderr,
 		})
 
 		if err != nil {
-			return fmt.Errorf("error checking file: %v, stderr: %s", err, sizeStderr.String())
+			return fmt.Errorf("error checking path type: %v, stderr: %s", err, pathTypeStderr.String())
 		}
 
-		fileSize, err := strconv.ParseInt(strings.TrimSpace(sizeStdout.String()), 10, 64)
-		if err != nil {
-			return fmt.Errorf("error parsing file size: %w", err)
+		pathType := strings.TrimSpace(pathTypeStdout.String())
+		if pathType == "notfound" {
+			return fmt.Errorf("path %s does not exist on the pod", podPath)
 		}
 
-		tempFile := localPath + ".download"
-		outFile, err := os.Create(tempFile)
-		if err != nil {
-			return fmt.Errorf("error creating local file: %w", err)
-		}
-		defer func() {
-			outFile.Close()
+		fmt.Printf("Path type for %s: %s\n", podPath, pathType)
+
+		if pathType == "directory" {
+			fmt.Printf("Downloading directory %s via chunked tar streaming\n", podPath)
+
+			if err := os.MkdirAll(localPath, 0755); err != nil {
+				return fmt.Errorf("error creating local directory: %w", err)
+			}
+
+			tempTarFile := filepath.Join(os.TempDir(), fmt.Sprintf("download-%d.tar", time.Now().UnixNano()))
+			fmt.Printf("Using temporary file: %s\n", tempTarFile)
+
+			tarFile, err := os.Create(tempTarFile)
 			if err != nil {
-				os.Remove(tempFile)
+				return fmt.Errorf("error creating temp tar file: %w", err)
 			}
-		}()
+			defer func() {
+				tarFile.Close()
+				os.Remove(tempTarFile)
+			}()
 
-		bar := progressbar.DefaultBytes(
-			fileSize,
-			"Downloading",
-		)
+			tarCmd := []string{"sh", "-c", fmt.Sprintf("cd %s && tar -cf - .", podPath)}
+			req = clientset.CoreV1().RESTClient().Post().
+				Resource("pods").
+				Name(podName).
+				Namespace(namespace).
+				SubResource("exec").
+				VersionedParams(&corev1.PodExecOptions{
+					Container: containerName,
+					Command:   tarCmd,
+					Stdout:    true,
+					Stderr:    true,
+				}, scheme.ParameterCodec)
 
-		bufWriter := bufio.NewWriterSize(outFile, 8*1024*1024) // 8MB buffer
-		writer := io.MultiWriter(bufWriter, bar)
-
-		cmd := []string{"cat", podPath}
-		req = clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(podName).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: containerName,
-				Command:   cmd,
-				Stdout:    true,
-				Stderr:    true,
-			}, scheme.ParameterCodec)
-
-		exec, err = remotecommand.NewSPDYExecutor(configCopy, "POST", req.URL())
-		if err != nil {
-			return fmt.Errorf("error creating SPDY executor for download: %w", err)
-		}
-
-		var stderr bytes.Buffer
-		err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
-			Stdout: writer,
-			Stderr: &stderr,
-		})
-
-		if flushErr := bufWriter.Flush(); flushErr != nil {
-			return fmt.Errorf("error flushing output buffer: %w", flushErr)
-		}
-
-		if err != nil {
-			return fmt.Errorf("exec error during download: %v, stderr: %s", err, stderr.String())
-		}
-
-		outFile.Close()
-
-		if info, err := os.Stat(tempFile); err == nil {
-			if info.Size() != fileSize {
-				return fmt.Errorf("incomplete download: got %d bytes, expected %d bytes",
-					info.Size(), fileSize)
+			exec, err = remotecommand.NewSPDYExecutor(configCopy, "POST", req.URL())
+			if err != nil {
+				return fmt.Errorf("error creating SPDY executor for tar: %w", err)
 			}
 
-			if err := os.Rename(tempFile, localPath); err != nil {
-				return fmt.Errorf("error moving completed download to final location: %w", err)
+			fmt.Println("Starting download... (this may take a while for large directories)")
+
+			startTime := time.Now()
+			lastUpdateTime := startTime
+			var bytesReceived int64
+
+			progressWriter := &progressReporter{
+				writer: tarFile,
+				progressCallback: func(n int) {
+					bytesReceived += int64(n)
+
+					if time.Since(lastUpdateTime) > 1*time.Second {
+						elapsed := time.Since(startTime)
+						rate := float64(bytesReceived) / (1024 * 1024 * elapsed.Seconds())
+						fmt.Printf("Downloaded %.2f MB (%.2f MB/s)\n",
+							float64(bytesReceived)/(1024*1024), rate)
+						lastUpdateTime = time.Now()
+					}
+				},
 			}
+
+			var stderr bytes.Buffer
+			err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+				Stdout: progressWriter,
+				Stderr: &stderr,
+			})
+
+			if err != nil {
+				return fmt.Errorf("exec error during tar download: %v, stderr: %s", err, stderr.String())
+			}
+
+			elapsed := time.Since(startTime)
+			rate := float64(bytesReceived) / (1024 * 1024 * elapsed.Seconds())
+			fmt.Printf("Downloaded %.2f MB (%.2f MB/s)\n",
+				float64(bytesReceived)/(1024*1024), rate)
+
+			tarFile.Close()
+
+			fmt.Printf("Download complete. Extracting to %s\n", localPath)
+
+			readTarFile, err := os.Open(tempTarFile)
+			if err != nil {
+				return fmt.Errorf("error opening tar file for extraction: %w", err)
+			}
+			defer readTarFile.Close()
+
+			tr := tar.NewReader(readTarFile)
+			extractedFiles := 0
+
+			for {
+				header, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return fmt.Errorf("error reading tar header: %w", err)
+				}
+
+				target := filepath.Join(localPath, header.Name)
+
+				switch header.Typeflag {
+				case tar.TypeDir:
+					if err := os.MkdirAll(target, 0755); err != nil {
+						return fmt.Errorf("error creating directory %s: %w", target, err)
+					}
+				case tar.TypeReg:
+					parentDir := filepath.Dir(target)
+					if err := os.MkdirAll(parentDir, 0755); err != nil {
+						return fmt.Errorf("error creating parent dir for %s: %w", target, err)
+					}
+
+					f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+					if err != nil {
+						return fmt.Errorf("error creating file %s: %w", target, err)
+					}
+
+					if _, err := io.Copy(f, tr); err != nil {
+						f.Close()
+						return fmt.Errorf("error extracting file %s: %w", target, err)
+					}
+					f.Close()
+					extractedFiles++
+
+					if extractedFiles%1000 == 0 {
+						fmt.Printf("Extracted %d files...\n", extractedFiles)
+					}
+				case tar.TypeSymlink:
+					parentDir := filepath.Dir(target)
+					if err := os.MkdirAll(parentDir, 0755); err != nil {
+						return fmt.Errorf("error creating parent dir for symlink %s: %w", target, err)
+					}
+
+					if err := os.Symlink(header.Linkname, target); err != nil {
+						return fmt.Errorf("error creating symlink %s -> %s: %w", target, header.Linkname, err)
+					}
+				}
+			}
+
+			fmt.Printf("Directory %s extracted successfully with %d files\n", podPath, extractedFiles)
 		} else {
-			return fmt.Errorf("error getting stats of downloaded file: %w", err)
+			sizeCmd := []string{"stat", "-c", "%s", podPath}
+			req := clientset.CoreV1().RESTClient().Post().
+				Resource("pods").
+				Name(podName).
+				Namespace(namespace).
+				SubResource("exec").
+				VersionedParams(&corev1.PodExecOptions{
+					Container: containerName,
+					Command:   sizeCmd,
+					Stdout:    true,
+					Stderr:    true,
+				}, scheme.ParameterCodec)
+
+			exec, err := remotecommand.NewSPDYExecutor(configCopy, "POST", req.URL())
+			if err != nil {
+				return fmt.Errorf("error creating SPDY executor: %w", err)
+			}
+
+			var sizeStdout, sizeStderr bytes.Buffer
+			err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+				Stdout: &sizeStdout,
+				Stderr: &sizeStderr,
+			})
+
+			if err != nil {
+				return fmt.Errorf("error checking file: %v, stderr: %s", err, sizeStderr.String())
+			}
+
+			fileSize, err := strconv.ParseInt(strings.TrimSpace(sizeStdout.String()), 10, 64)
+			if err != nil {
+				return fmt.Errorf("error parsing file size: %w", err)
+			}
+
+			tempFile := localPath + ".download"
+			outFile, err := os.Create(tempFile)
+			if err != nil {
+				return fmt.Errorf("error creating local file: %w", err)
+			}
+			defer func() {
+				outFile.Close()
+				if err != nil {
+					os.Remove(tempFile)
+				}
+			}()
+
+			bar := progressbar.DefaultBytes(
+				fileSize,
+				"Downloading",
+			)
+
+			bufWriter := bufio.NewWriterSize(outFile, 8*1024*1024) // 8MB buffer
+			writer := io.MultiWriter(bufWriter, bar)
+
+			cmd := []string{"cat", podPath}
+			req = clientset.CoreV1().RESTClient().Post().
+				Resource("pods").
+				Name(podName).
+				Namespace(namespace).
+				SubResource("exec").
+				VersionedParams(&corev1.PodExecOptions{
+					Container: containerName,
+					Command:   cmd,
+					Stdout:    true,
+					Stderr:    true,
+				}, scheme.ParameterCodec)
+
+			exec, err = remotecommand.NewSPDYExecutor(configCopy, "POST", req.URL())
+			if err != nil {
+				return fmt.Errorf("error creating SPDY executor for download: %w", err)
+			}
+
+			var stderr bytes.Buffer
+			err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+				Stdout: writer,
+				Stderr: &stderr,
+			})
+
+			if flushErr := bufWriter.Flush(); flushErr != nil {
+				return fmt.Errorf("error flushing output buffer: %w", flushErr)
+			}
+
+			if err != nil {
+				return fmt.Errorf("exec error during download: %v, stderr: %s", err, stderr.String())
+			}
+
+			outFile.Close()
+
+			if info, err := os.Stat(tempFile); err == nil {
+				if info.Size() != fileSize {
+					return fmt.Errorf("incomplete download: got %d bytes, expected %d bytes",
+						info.Size(), fileSize)
+				}
+
+				if err := os.Rename(tempFile, localPath); err != nil {
+					return fmt.Errorf("error moving completed download to final location: %w", err)
+				}
+			} else {
+				return fmt.Errorf("error getting stats of downloaded file: %w", err)
+			}
 		}
 	}
 
@@ -848,18 +1035,18 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 
 	if downloadErr != nil {
 		fmt.Printf("Failed to download artifact after multiple retries: %v\n", downloadErr)
-		if _, err := os.Stat(outputPath); err == nil {
-			os.Remove(outputPath)
-			fmt.Println("Removed incomplete download file")
-		}
 		return
 	}
 
 	if fileInfo, err := os.Stat(outputPath); err == nil {
-		fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
-		fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
+		if fileInfo.IsDir() {
+			fmt.Printf("Artifact directory downloaded successfully to %s\n", outputPath)
+		} else {
+			fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
+			fmt.Printf("Artifact downloaded successfully to %s (%.2f MB)\n", outputPath, fileSizeMB)
+		}
 	} else {
-		fmt.Printf("Artifact downloaded but unable to get file size: %v\n", err)
+		fmt.Printf("Artifact downloaded but unable to get file info: %v\n", err)
 	}
 }
 
@@ -1390,4 +1577,65 @@ func getTektonClient() (*tektonclientset.Clientset, error) {
 	}
 
 	return tektonClient, nil
+}
+
+func extractTarGz(tarFile, destDir string) error {
+	file, err := os.Open(tarFile)
+	if err != nil {
+		return fmt.Errorf("error opening tar file: %w", err)
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("error creating gzip reader: %w", err)
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error reading tar: %w", err)
+		}
+
+		targetPath := filepath.Join(destDir, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				return fmt.Errorf("error creating directory %s: %w", targetPath, err)
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return fmt.Errorf("error creating parent directory for %s: %w", targetPath, err)
+			}
+
+			outFile, err := os.Create(targetPath)
+			if err != nil {
+				return fmt.Errorf("error creating file %s: %w", targetPath, err)
+			}
+
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return fmt.Errorf("error writing to %s: %w", targetPath, err)
+			}
+			outFile.Close()
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return fmt.Errorf("error creating parent directory for symlink %s: %w", targetPath, err)
+			}
+
+			if err := os.Symlink(header.Linkname, targetPath); err != nil {
+				return fmt.Errorf("error creating symlink %s -> %s: %w",
+					targetPath, header.Linkname, err)
+			}
+		}
+	}
+
+	return nil
 }
