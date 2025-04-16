@@ -185,6 +185,8 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 				if err := r.createArtifactServingResources(ctx, imageBuild); err != nil {
 					return ctrl.Result{}, err
 				}
+
+				return r.updateArtifactInfo(ctx, imageBuild)
 			}
 
 			return r.updateArtifactInfo(ctx, imageBuild)
