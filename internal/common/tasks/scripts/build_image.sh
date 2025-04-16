@@ -137,14 +137,40 @@ echo "copying build artifacts to shared workspace..."
 
 mkdir -p $(workspaces.shared-workspace.path)
 
-cp -v /output/${exportFile} $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+if [ -d "/output/${exportFile}" ]; then
+    echo "${exportFile} is a directory, copying recursively..."
+    cp -rv "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+else
+    echo "${exportFile} is a regular file, copying..."
+    cp -v "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+fi
 
-cp -vL /output/disk.img $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
+if [ -d "/output/disk.img" ]; then
+    echo "disk.img is a directory, copying recursively..."
+    cp -rv "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
+elif [ -L "/output/disk.img" ]; then
+    echo "disk.img is a symlink, copying with -L to follow symlink..."
+    cp -vL "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
+elif [ -f "/output/disk.img" ]; then
+    echo "disk.img is a file, copying..."
+    cp -v "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
+else
+    echo "Warning: disk.img is neither a file, directory, nor symlink"
+fi
 
 pushd $(workspaces.shared-workspace.path)
-ln -sf ${exportFile} disk.img
+if [ -d "${exportFile}" ]; then
+    echo "Creating symlink to directory ${exportFile}"
+    ln -sf ${exportFile} disk.img
+elif [ -f "${exportFile}" ]; then
+    echo "Creating symlink to file ${exportFile}"
+    ln -sf ${exportFile} disk.img
+else
+    echo "Warning: ${exportFile} not found in workspace, cannot create symlink"
+fi
 popd
 
+# Copy the image manifest
 cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo "Failed to copy image.json"
 
 echo "Contents of shared workspace:"

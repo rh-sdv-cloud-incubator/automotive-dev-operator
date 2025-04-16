@@ -144,6 +144,10 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
+	if followLogs {
+		waitForBuild = true
+	}
+
 	existing := &automotivev1.ImageBuild{}
 	err = c.Get(ctx, types.NamespacedName{Name: buildName, Namespace: namespace}, existing)
 	if err == nil {
@@ -189,7 +193,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	// Update ownership in ConfigMap
 	if err := updateConfigMapOwnership(ctx, c, configMapName, namespace, imageBuild); err != nil {
 		handleError(err)
 	}
@@ -203,7 +206,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 	fmt.Printf("ImageBuild %s created successfully in namespace %s\n", imageBuild.Name, namespace)
 
 	if followLogs {
-		waitForBuild = true // follow implies wait
 		if err := streamBuildLogs(c, imageBuild); err != nil {
 			handleError(err)
 		}
