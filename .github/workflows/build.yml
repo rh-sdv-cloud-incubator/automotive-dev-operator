@@ -43,6 +43,8 @@ jobs:
                   tags: |
                       ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-arm64
                       ${{ env.OPERATOR_IMAGE }}:latest-arm64
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
 
     build-operator-amd64:
         runs-on: ubuntu-latest
@@ -69,6 +71,8 @@ jobs:
                   tags: |
                       ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-amd64
                       ${{ env.OPERATOR_IMAGE }}:latest-amd64
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
 
     create-multiarch-manifest:
         needs: [build-operator-arm64, build-operator-amd64]
