@@ -4,6 +4,8 @@ import (
 	_ "embed"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,8 +98,8 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 }
 
 // GenerateBuildAutomotiveImageTask creates a Tekton Task for building automotive images
-func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
-	return &tektonv1.Task{
+func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev1.BuildConfig) *tektonv1.Task {
+	task := &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
 			Kind:       "Task",
@@ -250,6 +252,25 @@ func GenerateBuildAutomotiveImageTask(namespace string) *tektonv1.Task {
 			},
 		},
 	}
+
+	if buildConfig != nil && buildConfig.UseMemoryVolumes {
+		for i := range task.Spec.Volumes {
+			vol := &task.Spec.Volumes[i]
+
+			if vol.Name == "build-dir" || vol.Name == "run-dir" {
+				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				}
+
+				if buildConfig.MemoryVolumeSize != "" {
+					sizeLimit := resource.MustParse(buildConfig.MemoryVolumeSize)
+					vol.EmptyDir.SizeLimit = &sizeLimit
+				}
+			}
+		}
+	}
+
+	return task
 }
 
 // GenerateTektonPipeline creates a Tekton Pipeline for automotive building process

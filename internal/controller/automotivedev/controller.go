@@ -23,6 +23,7 @@ type AutomotiveDevReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Log    logr.Logger
+	Ready  chan struct{}
 }
 
 const (
@@ -55,7 +56,7 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("AutomotiveDev fetched successfully", "name", av.Name)
 
-	tasks := generateTektonTasks(TektonResourcesNamespace)
+	tasks := generateTektonTasks(TektonResourcesNamespace, av.Spec.BuildConfig)
 	for _, task := range tasks {
 		task.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = av.Name
 
@@ -82,6 +83,12 @@ func (r *AutomotiveDevReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
 		log.Error(err, "Failed to create/update Pipeline")
 		return ctrl.Result{}, err
+	}
+
+	select {
+	case <-r.Ready:
+	default:
+		close(r.Ready)
 	}
 
 	log.Info("Successfully reconciled ")
@@ -122,9 +129,9 @@ func (r *AutomotiveDevReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func generateTektonTasks(namespace string) []*tektonv1.Task {
+func generateTektonTasks(namespace string, buildConfig *automotivev1.BuildConfig) []*tektonv1.Task {
 	return []*tektonv1.Task{
-		tasks.GenerateBuildAutomotiveImageTask(namespace),
+		tasks.GenerateBuildAutomotiveImageTask(namespace, buildConfig),
 		tasks.GeneratePushArtifactRegistryTask(namespace),
 	}
 }

@@ -39,10 +39,20 @@ spec:
           spec:
             description: AutomotiveDevSpec defines the desired state of AutomotiveDev
             properties:
-              foo:
-                description: Foo is an example field of AutomotiveDev. Edit automotivedev_types.go
-                  to remove/update
-                type: string
+              buildConfig:
+                description: BuildConfig defines the global configuration for build
+                  operations
+                properties:
+                  memoryVolumeSize:
+                    description: |-
+                      MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
+                      Example: "2Gi"
+                    type: string
+                  useMemoryVolumes:
+                    description: UseMemoryVolumes determines whether to use memory-backed
+                      volumes for build operations
+                    type: boolean
+                type: object
             type: object
           status:
             description: AutomotiveDevStatus defines the observed state of AutomotiveDev

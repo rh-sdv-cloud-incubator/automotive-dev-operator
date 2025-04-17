@@ -231,7 +231,17 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
 	log.Info("Creating TaskRun for ImageBuild")
 
-	buildTask := tasks.GenerateBuildAutomotiveImageTask(OperatorNamespace)
+	autoDev := &automotivev1.AutomotiveDev{}
+	err := r.Get(ctx, types.NamespacedName{Name: "automotive-dev", Namespace: OperatorNamespace}, autoDev)
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to get AutomotiveDev configuration: %w", err)
+	}
+
+	var buildConfig *automotivev1.BuildConfig
+	if err == nil && autoDev.Spec.BuildConfig != nil {
+		buildConfig = autoDev.Spec.BuildConfig
+	}
+	buildTask := tasks.GenerateBuildAutomotiveImageTask(OperatorNamespace, buildConfig)
 
 	if imageBuild.Status.PVCName == "" {
 		workspacePVCName, err := r.getOrCreateWorkspacePVC(ctx, imageBuild)

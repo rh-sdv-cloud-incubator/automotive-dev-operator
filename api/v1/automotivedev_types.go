@@ -28,8 +28,18 @@ type AutomotiveDevSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of AutomotiveDev. Edit automotivedev_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// BuildConfig defines the global configuration for build operations
+    BuildConfig *BuildConfig `json:"buildConfig,omitempty"`
+}
+
+// BuildConfig defines configuration options for build operations
+type BuildConfig struct {
+    // UseMemoryVolumes determines whether to use memory-backed volumes for build operations
+    UseMemoryVolumes bool `json:"useMemoryVolumes,omitempty"`
+
+    // MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
+    // Example: "2Gi"
+    MemoryVolumeSize string `json:"memoryVolumeSize,omitempty"`
 }
 
 // AutomotiveDevStatus defines the observed state of AutomotiveDev

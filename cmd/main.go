@@ -141,23 +141,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&automotivedev.AutomotiveDevReconciler{
+	autoDevReady := make(chan struct{})
+
+	autoDevReconciler := &automotivedev.AutomotiveDevReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Log:    ctrl.Log.WithName("controllers").WithName("AutomotiveDev"),
-	}).SetupWithManager(mgr); err != nil {
+		Ready:  autoDevReady,
+	}
+
+	if err = autoDevReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AutomotiveDev")
 		os.Exit(1)
 	}
 
-	if err = (&imagebuild.ImageBuildReconciler{
+	imageBuildReconciler := &imagebuild.ImageBuildReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Log:    ctrl.Log.WithName("controllers").WithName("ImageBuild"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ImageBuild")
-		os.Exit(1)
 	}
+
+	go func() {
+		<-autoDevReady
+		setupLog.Info("AutomotiveDev is ready, starting ImageBuild controller")
+
+		if err := imageBuildReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ImageBuild")
+			os.Exit(1)
+		}
+	}()
 
 	// Health checks
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
