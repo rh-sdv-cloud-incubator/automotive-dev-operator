@@ -29,17 +29,22 @@ type AutomotiveDevSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// BuildConfig defines the global configuration for build operations
-    BuildConfig *BuildConfig `json:"buildConfig,omitempty"`
+	BuildConfig *BuildConfig `json:"buildConfig,omitempty"`
 }
 
 // BuildConfig defines configuration options for build operations
 type BuildConfig struct {
-    // UseMemoryVolumes determines whether to use memory-backed volumes for build operations
-    UseMemoryVolumes bool `json:"useMemoryVolumes,omitempty"`
+	// UseMemoryVolumes determines whether to use memory-backed volumes for build operations
+	UseMemoryVolumes bool `json:"useMemoryVolumes,omitempty"`
 
-    // MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
-    // Example: "2Gi"
-    MemoryVolumeSize string `json:"memoryVolumeSize,omitempty"`
+	// MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
+	// Example: "2Gi"
+	MemoryVolumeSize string `json:"memoryVolumeSize,omitempty"`
+
+	// PVCSize specifies the size for persistent volume claims created for build workspaces
+	// Default: "8Gi"
+	// +optional
+	PVCSize string `json:"pvcSize,omitempty"`
 }
 
 // AutomotiveDevStatus defines the observed state of AutomotiveDev

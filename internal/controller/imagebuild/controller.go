@@ -889,10 +889,19 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(ctx context.Context, imag
 			"old-pvc", imageBuild.Status.PVCName)
 	}
 
+
+	autoDev := &automotivev1.AutomotiveDev{}
+	err := r.Get(ctx, types.NamespacedName{Name: "automotive-dev", Namespace: OperatorNamespace}, autoDev)
+
+	storageSize := resource.MustParse("8Gi")
+	if err == nil && autoDev.Spec.BuildConfig != nil && autoDev.Spec.BuildConfig.PVCSize != "" {
+		storageSize = resource.MustParse(autoDev.Spec.BuildConfig.PVCSize)
+		log.Info("Using BuildConfig PVCSize", "size", autoDev.Spec.BuildConfig.PVCSize)
+	}
+
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	uniquePVCName := fmt.Sprintf("%s-ws-%s", imageBuild.Name, timestamp)
 
-	storageSize := resource.MustParse("8Gi")
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      uniquePVCName,
