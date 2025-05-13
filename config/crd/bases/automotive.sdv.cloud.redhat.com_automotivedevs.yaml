@@ -48,6 +48,11 @@ spec:
                       MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
                       Example: "2Gi"
                     type: string
+                  pvcSize:
+                    description: |-
+                      PVCSize specifies the size for persistent volume claims created for build workspaces
+                      Default: "8Gi"
+                    type: string
                   useMemoryVolumes:
                     description: UseMemoryVolumes determines whether to use memory-backed
                       volumes for build operations

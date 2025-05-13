@@ -301,10 +301,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 			},
 		},
 		{
-			Name: "automotive-osbuild-image",
+			Name: "automotive-image-builder",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
-				StringVal: imageBuild.Spec.AutomativeOSBuildImage,
+				StringVal: imageBuild.Spec.AutomotiveImageBuilder,
 			},
 		},
 	}
