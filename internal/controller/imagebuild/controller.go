@@ -889,7 +889,6 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(ctx context.Context, imag
 			"old-pvc", imageBuild.Status.PVCName)
 	}
 
-
 	autoDev := &automotivev1.AutomotiveDev{}
 	err := r.Get(ctx, types.NamespacedName{Name: "automotive-dev", Namespace: OperatorNamespace}, autoDev)
 
