@@ -4,10 +4,10 @@ import (
 	_ "embed"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/resource"
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
@@ -352,7 +352,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 						Type:      tektonv1.ParamTypeString,
 						StringVal: AutomotiveImageBuilder,
 					},
-					Description: "Automotive OSBuild image to use for building",
+					Description: "automotive-image-builder container image to use for building",
 				},
 				{
 					Name:        "repository-url",
@@ -445,10 +445,10 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 							},
 						},
 						{
-							Name: "automotive-osbuild-image",
+							Name: "automotive-image-builder",
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
-								StringVal: "$(params.automotive-osbuild-image)",
+								StringVal: "$(params.automotive-image-builder)",
 							},
 						},
 					},
