@@ -12,6 +12,8 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const AutomotiveImageBuilder = "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
+
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
 func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 	return &tektonv1.Task{
@@ -140,12 +142,12 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 					Description: "Export format for the build",
 				},
 				{
-					Name:        "automotive-osbuild-image",
+					Name:        "automotive-image-builder",
 					Type:        tektonv1.ParamTypeString,
-					Description: "Automotive OSBuild container image to use",
+					Description: "automotive-image-builder container image to use",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "quay.io/centos-sig-automotive/automotive-image-builder:latest",
+						StringVal: AutomotiveImageBuilder,
 					},
 				},
 			},
@@ -181,7 +183,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 				},
 				{
 					Name:  "build-image",
-					Image: "$(params.automotive-osbuild-image)",
+					Image: "$(params.automotive-image-builder)",
 					SecurityContext: &corev1.SecurityContext{
 						Privileged: ptr.To(true),
 						SELinuxOptions: &corev1.SELinuxOptions{
@@ -344,11 +346,11 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					},
 				},
 				{
-					Name: "automotive-osbuild-image",
+					Name: "automotive-image-builder",
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "quay.io/centos-sig-automotive/automotive-image-builder:latest",
+						StringVal: AutomotiveImageBuilder,
 					},
 					Description: "Automotive OSBuild image to use for building",
 				},

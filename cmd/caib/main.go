@@ -57,25 +57,25 @@ func (pr *progressReporter) Write(p []byte) (int, error) {
 }
 
 var (
-	kubeconfig    string
-	namespace     string
-	imageBuildCfg string
-	manifest      string
-	buildName     string
-	distro        string
-	target        string
-	architecture  string
-	exportFormat  string
-	mode          string
-	osbuildImage  string
-	storageClass  string
-	outputDir     string
-	timeout       int
-	waitForBuild  bool
-	download      bool
-	exposeRoute   bool
-	customDefs    []string
-	followLogs    bool
+	kubeconfig             string
+	namespace              string
+	imageBuildCfg          string
+	manifest               string
+	buildName              string
+	distro                 string
+	target                 string
+	architecture           string
+	exportFormat           string
+	mode                   string
+	automotiveImageBuilder string
+	storageClass           string
+	outputDir              string
+	timeout                int
+	waitForBuild           bool
+	download               bool
+	exposeRoute            bool
+	customDefs             []string
+	followLogs             bool
 )
 
 func main() {
@@ -121,7 +121,7 @@ func main() {
 	buildCmd.Flags().StringVar(&architecture, "arch", "arm64", "architecture (amd64, arm64)")
 	buildCmd.Flags().StringVar(&exportFormat, "export-format", "image", "export format (image, qcow2)")
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
-	buildCmd.Flags().StringVar(&osbuildImage, "osbuild-image", "quay.io/centos-sig-automotive/automotive-image-builder:latest", "automotive osbuild image")
+	buildCmd.Flags().StringVar(&automotiveImageBuilder, "automotive-image-builder", "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0", "container image for automotive-image-builder")
 	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
@@ -259,7 +259,7 @@ func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapN
 			Architecture:           architecture,
 			ExportFormat:           exportFormat,
 			Mode:                   mode,
-			AutomativeOSBuildImage: osbuildImage,
+			AutomotiveImageBuilder: automotiveImageBuilder,
 			StorageClass:           storageClass,
 			ServeArtifact:          serveArtifact,
 			ServeExpiryHours:       24,

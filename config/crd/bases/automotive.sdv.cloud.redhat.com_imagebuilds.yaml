@@ -42,8 +42,8 @@ spec:
               architecture:
                 description: Architecture specifies the target architecture
                 type: string
-              automativeOSBuildImage:
-                description: AutomativeOSBuildImage specifies the image to use for
+              automotiveImageBuilder:
+                description: AutomotiveImageBuilder specifies the image to use for
                   building
                 type: string
               distro:

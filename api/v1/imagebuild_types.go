@@ -44,8 +44,8 @@ type ImageBuildSpec struct {
 	// StorageClass is the name of the storage class to use for the build PVC
 	StorageClass string `json:"storageClass,omitempty"`
 
-	// AutomativeOSBuildImage specifies the image to use for building
-	AutomativeOSBuildImage string `json:"automativeOSBuildImage,omitempty"`
+	// AutomotiveImageBuilder specifies the image to use for building
+	AutomotiveImageBuilder string `json:"automotiveImageBuilder,omitempty"`
 
 	// ManifestConfigMap specifies the name of the ConfigMap containing the manifest configuration
 	ManifestConfigMap string `json:"manifestConfigMap,omitempty"`
