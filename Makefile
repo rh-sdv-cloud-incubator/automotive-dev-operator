@@ -328,4 +328,4 @@ catalog-push: ## Push a catalog image.
 
 .PHONY: build-caib
 build-caib: ## Build the caib tool
-	go build -o bin/caib cmd/caib/main.go
+	go build -ldflags "-X main.version=$(VERSION)" -o bin/caib cmd/caib/main.go

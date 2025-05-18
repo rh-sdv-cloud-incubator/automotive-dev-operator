@@ -76,13 +76,18 @@ var (
 	exposeRoute            bool
 	customDefs             []string
 	followLogs             bool
+	version                string
 )
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "caib",
-		Short: "Cloud Automotive Image Builder",
+		Use:     "caib",
+		Short:   "Cloud Automotive Image Builder",
+		Version: version,
 	}
+
+	rootCmd.InitDefaultVersionFlag()
+	rootCmd.SetVersionTemplate("caib version: {{.Version}}\n")
 
 	buildCmd := &cobra.Command{
 		Use:   "build",
