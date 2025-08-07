@@ -45,6 +45,11 @@ type BuildConfig struct {
 	// Default: "8Gi"
 	// +optional
 	PVCSize string `json:"pvcSize,omitempty"`
+
+	// RuntimeClassName specifies the runtime class to use for the build pod
+	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+	// +optional
+	RuntimeClassName string `json:"runtimeClassName,omitempty"`
 }
 
 // AutomotiveDevStatus defines the observed state of AutomotiveDev

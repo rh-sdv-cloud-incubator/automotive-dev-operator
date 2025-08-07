@@ -342,6 +342,17 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 		},
 	}
 
+	// prepare podTemplate with runtime class fallback
+	podTemplate := &pod.PodTemplate{
+		Affinity: &corev1.Affinity{NodeAffinity: nodeAffinity},
+	}
+	if buildConfig != nil && buildConfig.RuntimeClassName != "" {
+		podTemplate.RuntimeClassName = &buildConfig.RuntimeClassName
+	}
+	if imageBuild.Spec.RuntimeClassName != "" {
+		log.Info("Setting RuntimeClassName from ImageBuild spec", "runtimeClassName", imageBuild.Spec.RuntimeClassName)
+		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName
+	}
 	taskRun := &tektonv1.TaskRun{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%s-build-", imageBuild.Name),
@@ -361,14 +372,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			TaskSpec:   &buildTask.Spec,
-			Params:     params,
-			Workspaces: workspaces,
-			PodTemplate: &pod.PodTemplate{
-				Affinity: &corev1.Affinity{
-					NodeAffinity: nodeAffinity,
-				},
-			},
+			TaskSpec:    &buildTask.Spec,
+			Params:      params,
+			Workspaces:  workspaces,
+			PodTemplate: podTemplate,
 		},
 	}
 
@@ -455,7 +462,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		if route.Status.Ingress == nil || len(route.Status.Ingress) == 0 || route.Status.Ingress[0].Host == "" {
+		if len(route.Status.Ingress) == 0 || route.Status.Ingress[0].Host == "" {
 			log.Info("route status not yet populated with host", "route", routeName)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}

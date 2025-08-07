@@ -69,6 +69,7 @@ var (
 	mode                   string
 	automotiveImageBuilder string
 	storageClass           string
+	runtimeClassName       string
 	outputDir              string
 	timeout                int
 	waitForBuild           bool
@@ -128,6 +129,7 @@ func main() {
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
 	buildCmd.Flags().StringVar(&automotiveImageBuilder, "automotive-image-builder", "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0", "container image for automotive-image-builder")
 	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
+	buildCmd.Flags().StringVar(&runtimeClassName, "runtime-class", "", "runtime class name for build pods")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
@@ -266,6 +268,7 @@ func createImageBuild(ctx context.Context, c client.Client, name, ns, configMapN
 			Mode:                   mode,
 			AutomotiveImageBuilder: automotiveImageBuilder,
 			StorageClass:           storageClass,
+			RuntimeClassName:       runtimeClassName,
 			ServeArtifact:          serveArtifact,
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      configMapName,

@@ -53,6 +53,11 @@ spec:
                       PVCSize specifies the size for persistent volume claims created for build workspaces
                       Default: "8Gi"
                     type: string
+                  runtimeClassName:
+                    description: |-
+                      RuntimeClassName specifies the runtime class to use for the build pod
+                      More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+                    type: string
                   useMemoryVolumes:
                     description: UseMemoryVolumes determines whether to use memory-backed
                       volumes for build operations

@@ -21,6 +21,7 @@ spec:
   manifestConfigMap: mpp
   serveArtifact: false
   serveExpiryHours: 24
+  #runtimeClassName: "kata"
 # publishers:
 #     registry:
 #       repositoryUrl: "quay.io/bzlotnik/automotive-image:latest"
