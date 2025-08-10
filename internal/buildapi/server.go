@@ -267,7 +267,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ServeArtifact:          false,
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      cfgName,
-			InputFilesServer:       (len(req.CustomDefs) > 0 || len(req.AIBExtraArgs) > 0 || strings.Contains(req.Manifest, "source_path")),
+			InputFilesServer:       strings.Contains(req.Manifest, "source_path"),
 			ExposeRoute:            false,
 		},
 	}
