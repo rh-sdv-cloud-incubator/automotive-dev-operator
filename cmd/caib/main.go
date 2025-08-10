@@ -78,6 +78,7 @@ var (
 	customDefs             []string
 	followLogs             bool
 	version                string
+	aibExtraArgs           string
 )
 
 func main() {
@@ -136,6 +137,7 @@ func main() {
 	buildCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
 	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
+	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed as-is to automotive-image-builder")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
@@ -206,6 +208,10 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}()
 
 	if err := addCustomDefinitionsToConfigMap(ctx, c, configMapName, namespace, customDefs); err != nil {
+		handleError(err)
+	}
+
+	if err := addAIBArgsToConfigMap(ctx, c, configMapName, namespace, aibExtraArgs); err != nil {
 		handleError(err)
 	}
 
@@ -1362,6 +1368,27 @@ func addCustomDefinitionsToConfigMap(ctx context.Context, c client.Client, confi
 		return fmt.Errorf("error updating ConfigMap with custom definitions: %w", err)
 	}
 
+	return nil
+}
+
+func addAIBArgsToConfigMap(ctx context.Context, c client.Client, configMapName, ns string, args string) error {
+	if strings.TrimSpace(args) == "" {
+		return nil
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: ns}, cm); err != nil {
+		return fmt.Errorf("error getting ConfigMap for aib args: %w", err)
+	}
+
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data["aib-extra-args.txt"] = args
+
+	if err := c.Update(ctx, cm); err != nil {
+		return fmt.Errorf("error updating ConfigMap with aib args: %w", err)
+	}
 	return nil
 }
 

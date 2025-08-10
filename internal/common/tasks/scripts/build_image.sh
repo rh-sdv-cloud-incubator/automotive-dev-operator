@@ -98,6 +98,15 @@ else
   echo "No custom-definitions.env file found"
 fi
 
+AIB_EXTRA_ARGS=""
+AIB_EXTRA_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-extra-args.txt"
+if [ -f "$AIB_EXTRA_ARGS_FILE" ]; then
+  echo "Adding extra automotive-image-builder args from $AIB_EXTRA_ARGS_FILE"
+  AIB_EXTRA_ARGS="$(cat "$AIB_EXTRA_ARGS_FILE")"
+else
+  echo "No aib-extra-args.txt file found"
+fi
+
 arch="$(params.target-architecture)"
 case "$arch" in
   "arm64")
@@ -118,6 +127,7 @@ build_command="automotive-image-builder --verbose \
   --export $(params.export-format) \
   --osbuild-manifest=/output/image.json \
   $mode_param \
+  $AIB_EXTRA_ARGS \
   $MANIFEST_FILE \
   /output/${exportFile}"
 
@@ -128,7 +138,7 @@ cat "$MANIFEST_FILE"
 
 
 echo "Running the build command: $build_command"
-$build_command
+eval "$build_command"
 
 pushd /output
 ln -sf ./${exportFile} ./disk.img
