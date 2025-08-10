@@ -454,7 +454,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 					log.Error(err, "Error getting route")
 					return false, nil
 				}
-				return route.Status.Ingress != nil && len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
+				return len(route.Status.Ingress) > 0 && route.Status.Ingress[0].Host != "", nil
 			},
 		)
 		if err != nil {

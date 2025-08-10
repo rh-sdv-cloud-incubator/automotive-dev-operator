@@ -40,6 +40,7 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/buildapi"
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	// +kubebuilder:scaffold:imports
@@ -178,6 +179,16 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	addr := ":8080"
+	if p := os.Getenv("PORT"); p != "" {
+		addr = ":" + p
+	}
+	apiServer := buildapi.NewAPIServer(addr)
+	if err := mgr.Add(apiServer); err != nil {
+		setupLog.Error(err, "unable to add build-api server to manager")
 		os.Exit(1)
 	}
 
