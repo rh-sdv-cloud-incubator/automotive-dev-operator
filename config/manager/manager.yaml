@@ -57,9 +57,18 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --metrics-bind-address=0
         image: controller:latest
         imagePullPolicy: Always
         name: manager
+        env:
+        - name: BUILD_API_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - containerPort: 8080
+          name: build-api
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
