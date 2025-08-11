@@ -109,6 +109,10 @@ func handleBuildByName(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if len(parts) == 4 && parts[3] == "logs" {
+			streamLogs(w, r, name)
+			return
+		}
 		getBuild(w, r, name)
 	case http.MethodPost:
 		if len(parts) == 4 && parts[3] == "uploads" {
@@ -119,6 +123,107 @@ func handleBuildByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromEnv()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	deadline := time.Now().Add(2 * time.Minute)
+	var podName string
+
+	for {
+		if time.Now().After(deadline) {
+			http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+			return
+		}
+		ib := &automotivev1.ImageBuild{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err == nil {
+			tr := strings.TrimSpace(ib.Status.TaskRunName)
+			if tr != "" {
+				cs, err := kubernetes.NewForConfig(mustGetRESTConfig())
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/taskRun=" + tr})
+				if err == nil && len(pods.Items) > 0 {
+					podName = pods.Items[0].Name
+					break
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	cfg, err := getRESTConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	var stepNames []string
+	for _, c := range pod.Spec.Containers {
+		if strings.HasPrefix(c.Name, "step-") {
+			stepNames = append(stepNames, c.Name)
+		}
+	}
+	// Fallback: if no step containers (shouldn't happen), stream all containers
+	if len(stepNames) == 0 {
+		for _, c := range pod.Spec.Containers {
+			stepNames = append(stepNames, c.Name)
+		}
+	}
+
+	for _, cName := range stepNames {
+		req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
+		stream, err := req.Stream(ctx)
+		if err != nil {
+			// continue to next container if this one is not ready
+			continue
+		}
+		_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
+		io.Copy(w, stream)
+		stream.Close()
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
+func mustGetRESTConfig() *rest.Config {
+	cfg, err := getRESTConfig()
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
 func splitPath(p string) []string {
