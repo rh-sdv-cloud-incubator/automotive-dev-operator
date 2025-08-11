@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/buildapi"
@@ -15,7 +16,7 @@ import (
 func main() {
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
 	slog.SetDefault(slog.New(handler))
-	ctrl.SetLogger(ctrl.Log.WithName("build-api"))
+	ctrl.SetLogger(logr.FromSlogHandler(handler))
 
 	addr := ":8080"
 	if p := os.Getenv("PORT"); p != "" {

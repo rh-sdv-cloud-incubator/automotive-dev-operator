@@ -24,6 +24,13 @@ spec:
         image: quay.io/rh-sdv-cloud/automotive-dev-operator:latest
         imagePullPolicy: Always
         command: ["/build-api"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 512Mi
         env:
         - name: BUILD_API_NAMESPACE
           valueFrom:
