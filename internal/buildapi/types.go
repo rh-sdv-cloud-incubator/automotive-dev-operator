@@ -92,6 +92,8 @@ type BuildRequest struct {
 	RuntimeClassName       string       `json:"runtimeClassName"`
 	CustomDefs             []string     `json:"customDefs"`
 	AIBExtraArgs           []string     `json:"aibExtraArgs"`
+	ServeArtifact          bool         `json:"serveArtifact"`
+	ExposeRoute            bool         `json:"exposeRoute"`
 }
 
 // BuildResponse is returned by POST and GET build operations

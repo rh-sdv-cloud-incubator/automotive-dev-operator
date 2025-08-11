@@ -11,14 +11,17 @@ RUN go mod download
 
 # Copy the go source
 COPY cmd/main.go cmd/main.go
+COPY cmd/build-api/main.go cmd/build-api/main.go
 COPY api/ api/
 COPY internal/ internal/
 
 RUN CGO_ENABLED=0 go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 go build -a -o build-api cmd/build-api/main.go
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
+COPY --from=builder /workspace/build-api .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

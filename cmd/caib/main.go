@@ -125,6 +125,7 @@ func main() {
 	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
+	buildCmd.Flags().StringVarP(&namespace, "namespace", "n", "automotive-dev-operator-system", "namespace where the ImageBuild exists")
 
 	downloadCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace where the ImageBuild exists")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
@@ -206,6 +207,8 @@ func runBuild(cmd *cobra.Command, args []string) {
 			RuntimeClassName:       runtimeClassName,
 			CustomDefs:             customDefs,
 			AIBExtraArgs:           aibArgsArray,
+			ServeArtifact:          download || exposeRoute,
+			ExposeRoute:            exposeRoute,
 		}
 
 		resp, err := api.CreateBuild(ctx, req)
@@ -241,6 +244,9 @@ func runBuild(cmd *cobra.Command, args []string) {
 			defer cancel()
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
+			userFollowRequested := followLogs
+			var lastPhase, lastMessage string
+			logFollowWarned := false
 			for {
 				select {
 				case <-timeoutCtx.Done():
@@ -255,6 +261,21 @@ func runBuild(cmd *cobra.Command, args []string) {
 							resp2.Body.Close()
 							followLogs = false
 						} else if resp2 != nil {
+							body, _ := io.ReadAll(resp2.Body)
+							msg := strings.TrimSpace(string(body))
+							if resp2.StatusCode == http.StatusServiceUnavailable {
+								if !logFollowWarned && msg != "" {
+									fmt.Printf("log stream unavailable: %s\n", msg)
+									logFollowWarned = true
+								}
+							} else {
+								if msg != "" {
+									fmt.Printf("log stream error (%d): %s\n", resp2.StatusCode, msg)
+								} else {
+									fmt.Printf("log stream error: HTTP %d\n", resp2.StatusCode)
+								}
+								followLogs = false
+							}
 							resp2.Body.Close()
 						}
 					}
@@ -265,7 +286,13 @@ func runBuild(cmd *cobra.Command, args []string) {
 						fmt.Printf("status check failed: %v\n", err)
 						continue
 					}
-					fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+					if !userFollowRequested {
+						if st.Phase != lastPhase || st.Message != lastMessage {
+							fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+							lastPhase = st.Phase
+							lastMessage = st.Message
+						}
+					}
 					if st.Phase == "Completed" {
 						if download && st.ArtifactURL != "" {
 							fmt.Printf("Artifact available: %s\n", st.ArtifactURL)

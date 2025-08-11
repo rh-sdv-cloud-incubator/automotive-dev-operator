@@ -109,9 +109,15 @@ func handleBuildByName(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		if len(parts) == 4 && parts[3] == "logs" {
-			streamLogs(w, r, name)
-			return
+		if len(parts) == 4 {
+			switch parts[3] {
+			case "logs":
+				streamLogs(w, r, name)
+				return
+			case "artifact":
+				streamArtifact(w, r, name)
+				return
+			}
 		}
 		getBuild(w, r, name)
 	case http.MethodPost:
@@ -173,59 +179,85 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
-	pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var stepNames []string
-	for _, c := range pod.Spec.Containers {
-		if strings.HasPrefix(c.Name, "step-") {
-			stepNames = append(stepNames, c.Name)
-		}
-	}
-	// Fallback: if no step containers (shouldn't happen), stream all containers
-	if len(stepNames) == 0 {
-		for _, c := range pod.Spec.Containers {
-			stepNames = append(stepNames, c.Name)
-		}
-	}
-
-	// Attempt to stream; if none succeed, return 503 with diagnostics
 	var hadStream bool
-	var errs []string
-	for _, cName := range stepNames {
+	streamed := make(map[string]bool)
+	var lastErrs []string
+	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
-		stream, err := req.Stream(ctx)
+
+		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
-			continue
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		if !hadStream {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		stepNames := make([]string, 0, len(pod.Spec.Containers))
+		for _, c := range pod.Spec.Containers {
+			if strings.HasPrefix(c.Name, "step-") {
+				stepNames = append(stepNames, c.Name)
+			}
+		}
+		if len(stepNames) == 0 {
+			for _, c := range pod.Spec.Containers {
+				stepNames = append(stepNames, c.Name)
+			}
+		}
+
+		var errs []string
+
+		for _, cName := range stepNames {
+			if streamed[cName] {
+				continue
+			}
+
+			req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
+			stream, err := req.Stream(ctx)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
+				continue
+			}
+
+			if !hadStream {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			hadStream = true
+
+			_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+			io.Copy(w, stream)
+			stream.Close()
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+
+			streamed[cName] = true
 		}
-		hadStream = true
-		_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+
+		if len(errs) > 0 {
+			lastErrs = errs
 		}
-		io.Copy(w, stream)
-		stream.Close()
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+
+		if len(streamed) == len(stepNames) {
+			break
 		}
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
 	}
+
 	if !hadStream {
-		http.Error(w, "logs unavailable: "+strings.Join(errs, "; "), http.StatusServiceUnavailable)
+		http.Error(w, "logs unavailable: "+strings.Join(lastErrs, "; "), http.StatusServiceUnavailable)
 		return
 	}
 }
@@ -381,11 +413,11 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			AutomotiveImageBuilder: req.AutomotiveImageBuilder,
 			StorageClass:           req.StorageClass,
 			RuntimeClassName:       req.RuntimeClassName,
-			ServeArtifact:          false,
+			ServeArtifact:          req.ServeArtifact,
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       strings.Contains(req.Manifest, "source_path"),
-			ExposeRoute:            false,
+			ExposeRoute:            req.ExposeRoute,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -573,6 +605,123 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// streamArtifact streams the artifact file from the artifact pod to the client over HTTP.
+func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
+	namespace := resolveNamespace()
+	ctx := r.Context()
+
+	k8sClient, err := getClientFromEnv()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	build := &automotivev1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if build.Status.Phase != "Completed" {
+		http.Error(w, "artifact not available until build completes", http.StatusConflict)
+		return
+	}
+
+	artifactFileName := build.Status.ArtifactFileName
+	if artifactFileName == "" {
+		var ext string
+		switch build.Spec.ExportFormat {
+		case "image":
+			ext = ".raw"
+		case "qcow2":
+			ext = ".qcow2"
+		default:
+			ext = "." + build.Spec.ExportFormat
+		}
+		artifactFileName = fmt.Sprintf("%s-%s%s", build.Spec.Distro, build.Spec.Target, ext)
+	}
+
+	// Find the running artifact pod
+	podList := &corev1.PodList{}
+	if err := k8sClient.List(ctx, podList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			"app.kubernetes.io/name":                          "artifact-pod",
+			"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
+		}); err != nil {
+		http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+		return
+	}
+	var artifactPod *corev1.Pod
+	for i := range podList.Items {
+		p := &podList.Items[i]
+		if p.Status.Phase == corev1.PodRunning {
+			for _, cs := range p.Status.ContainerStatuses {
+				if cs.Name == "fileserver" && cs.Ready {
+					artifactPod = p
+					break
+				}
+			}
+		}
+		if artifactPod != nil {
+			break
+		}
+	}
+	if artifactPod == nil {
+		http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	restCfg, err := getRESTConfig()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	sourcePath := "/workspace/shared/" + artifactFileName
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"cat", sourcePath},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, req.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", artifactFileName))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: w,
+		Stderr: io.Discard,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("stream error: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
 func copyFileToPod(config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
