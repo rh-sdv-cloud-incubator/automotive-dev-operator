@@ -398,7 +398,6 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 		}
 
 		if resp.StatusCode == http.StatusOK {
-			// Stream to file
 			filename := name + ".artifact"
 			if cd := resp.Header.Get("Content-Disposition"); cd != "" {
 				if i := strings.Index(cd, "filename="); i >= 0 {
@@ -415,13 +414,55 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 				resp.Body.Close()
 				return err
 			}
-			_, copyErr := io.Copy(f, resp.Body)
-			resp.Body.Close()
-			if copyErr != nil {
-				f.Close()
-				os.Remove(tmp)
-				return copyErr
+			if cl := strings.TrimSpace(resp.Header.Get("Content-Length")); cl != "" {
+				done := make(chan struct{})
+				var written int64
+				go func() {
+					ticker := time.NewTicker(1 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-done:
+							return
+						case <-ticker.C:
+							fmt.Printf("Downloaded %.2f MB\n", float64(written)/(1024*1024))
+						}
+					}
+				}()
+				copyErr := func() error {
+					buf := make([]byte, 1024*128)
+					for {
+						n, er := resp.Body.Read(buf)
+						if n > 0 {
+							if _, ew := f.Write(buf[:n]); ew != nil {
+								return ew
+							}
+							written += int64(n)
+						}
+						if er == io.EOF {
+							break
+						}
+						if er != nil {
+							return er
+						}
+					}
+					return nil
+				}()
+				close(done)
+				if copyErr != nil {
+					f.Close()
+					os.Remove(tmp)
+					return copyErr
+				}
+			} else {
+				// unknown size
+				if _, copyErr := io.Copy(f, resp.Body); copyErr != nil {
+					f.Close()
+					os.Remove(tmp)
+					return copyErr
+				}
 			}
+			resp.Body.Close()
 			f.Close()
 			if err := os.Rename(tmp, outPath); err != nil {
 				return err

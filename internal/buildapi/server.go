@@ -669,35 +669,41 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		artifactFileName = fmt.Sprintf("%s-%s%s", build.Spec.Distro, build.Spec.Target, ext)
 	}
 
-	// Find the running artifact pod
-	podList := &corev1.PodList{}
-	if err := k8sClient.List(ctx, podList,
-		client.InNamespace(namespace),
-		client.MatchingLabels{
-			"app.kubernetes.io/name":                          "artifact-pod",
-			"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
-		}); err != nil {
-		http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
-		return
-	}
 	var artifactPod *corev1.Pod
-	for i := range podList.Items {
-		p := &podList.Items[i]
-		if p.Status.Phase == corev1.PodRunning {
-			for _, cs := range p.Status.ContainerStatuses {
-				if cs.Name == "fileserver" && cs.Ready {
-					artifactPod = p
-					break
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		podList := &corev1.PodList{}
+		if err := k8sClient.List(ctx, podList,
+			client.InNamespace(namespace),
+			client.MatchingLabels{
+				"app.kubernetes.io/name":                          "artifact-pod",
+				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
+			}); err != nil {
+			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+			return
+		}
+		for i := range podList.Items {
+			p := &podList.Items[i]
+			if p.Status.Phase == corev1.PodRunning {
+				for _, cs := range p.Status.ContainerStatuses {
+					if cs.Name == "fileserver" && cs.Ready {
+						artifactPod = p
+						break
+					}
 				}
+			}
+			if artifactPod != nil {
+				break
 			}
 		}
 		if artifactPod != nil {
 			break
 		}
-	}
-	if artifactPod == nil {
-		http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
-		return
+		if time.Now().After(deadline) {
+			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+			return
+		}
+		time.Sleep(3 * time.Second)
 	}
 
 	restCfg, err := getRESTConfig()
@@ -730,8 +736,27 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
+	sizeReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"stat", "-c", "%s", sourcePath},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+	sizeExec, sizeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
+	var sizeStdout, sizeStderr strings.Builder
+	if sizeErr == nil {
+		_ = sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: &sizeStderr})
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", artifactFileName))
+	if sz := strings.TrimSpace(sizeStdout.String()); sz != "" {
+		w.Header().Set("Content-Length", sz)
+	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
