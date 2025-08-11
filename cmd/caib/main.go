@@ -247,10 +247,8 @@ func runBuild(cmd *cobra.Command, args []string) {
 					handleError(fmt.Errorf("timed out waiting for build"))
 				case <-ticker.C:
 					if followLogs {
-						logCtx, logCancel := context.WithTimeout(ctx, 10*time.Second)
-						req, _ := http.NewRequestWithContext(logCtx, http.MethodGet, strings.TrimRight(serverURL, "/")+"/v1/builds/"+url.PathEscape(resp.Name)+"/logs?follow=1", nil)
+						req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(serverURL, "/")+"/v1/builds/"+url.PathEscape(resp.Name)+"/logs?follow=1", nil)
 						resp2, err := http.DefaultClient.Do(req)
-						logCancel()
 						if err == nil && resp2.StatusCode == http.StatusOK {
 							fmt.Println("Streaming logs...")
 							io.Copy(os.Stdout, resp2.Body)

@@ -179,11 +179,6 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
 	var stepNames []string
 	for _, c := range pod.Spec.Containers {
 		if strings.HasPrefix(c.Name, "step-") {
@@ -197,24 +192,41 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		}
 	}
 
+	// Attempt to stream; if none succeed, return 503 with diagnostics
+	var hadStream bool
+	var errs []string
 	for _, cName := range stepNames {
-		req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
-		stream, err := req.Stream(ctx)
-		if err != nil {
-			// continue to next container if this one is not ready
-			continue
-		}
-		_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
-		io.Copy(w, stream)
-		stream.Close()
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
+		stream, err := req.Stream(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
+			continue
+		}
+		if !hadStream {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		hadStream = true
+		_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		io.Copy(w, stream)
+		stream.Close()
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	if !hadStream {
+		http.Error(w, "logs unavailable: "+strings.Join(errs, "; "), http.StatusServiceUnavailable)
+		return
 	}
 }
 
