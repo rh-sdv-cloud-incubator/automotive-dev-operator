@@ -3,6 +3,7 @@ package buildapi
 import (
 	"archive/tar"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +35,9 @@ type APIServer struct {
 	addr   string
 	log    logr.Logger
 }
+
+//go:embed openapi.yaml
+var embeddedOpenAPI []byte
 
 type ctxKeyReqID struct{}
 
@@ -80,6 +84,11 @@ func (a *APIServer) createHandler() http.Handler {
 	mux.HandleFunc("/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(embeddedOpenAPI)
 	})
 	mux.HandleFunc("/v1/builds", a.handleBuilds)
 	mux.HandleFunc("/v1/builds/", a.handleBuildByName)
