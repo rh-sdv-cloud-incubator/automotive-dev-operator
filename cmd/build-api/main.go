@@ -23,7 +23,7 @@ func main() {
 		addr = ":" + p
 	}
 
-	apiServer := buildapi.NewAPIServer(addr)
+	apiServer := buildapi.NewAPIServerWithLogger(addr, ctrl.Log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -18,12 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// progressReporter kept for potential future use when streaming via API supports progress
-// (currently not used when downloading via API)
-
 var (
 	serverURL              string
-	kubeconfig             string
 	namespace              string
 	imageBuildCfg          string
 	manifest               string
@@ -384,42 +380,69 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/builds/"+url.PathEscape(name)+"/artifact", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+
+	base := strings.TrimRight(baseURL, "/")
+	urlStr := base + "/v1/builds/" + url.PathEscape(name) + "/artifact"
+
+	deadline := time.Now().Add(5 * time.Minute)
+	warned := false
+	for {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for artifact to become ready")
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			// Stream to file
+			filename := name + ".artifact"
+			if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+				if i := strings.Index(cd, "filename="); i >= 0 {
+					f := strings.Trim(cd[i+9:], "\" ")
+					if f != "" {
+						filename = f
+					}
+				}
+			}
+			outPath := filepath.Join(outDir, filename)
+			tmp := outPath + ".partial"
+			f, err := os.Create(tmp)
+			if err != nil {
+				resp.Body.Close()
+				return err
+			}
+			_, copyErr := io.Copy(f, resp.Body)
+			resp.Body.Close()
+			if copyErr != nil {
+				f.Close()
+				os.Remove(tmp)
+				return copyErr
+			}
+			f.Close()
+			if err := os.Rename(tmp, outPath); err != nil {
+				return err
+			}
+			fmt.Printf("Artifact downloaded to %s\n", outPath)
+			return nil
+		}
+
 		body, _ := io.ReadAll(resp.Body)
+		msg := strings.ToLower(strings.TrimSpace(string(body)))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusConflict || strings.Contains(msg, "not ready") {
+			if !warned {
+				fmt.Println("Artifact not ready yet. Waiting...")
+				warned = true
+			}
+			time.Sleep(3 * time.Second)
+			continue
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	filename := name + ".artifact"
-	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
-		if i := strings.Index(cd, "filename="); i >= 0 {
-			f := strings.Trim(cd[i+9:], "\" ")
-			if f != "" {
-				filename = f
-			}
-		}
-	}
-	outPath := filepath.Join(outDir, filename)
-	tmp := outPath + ".partial"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	f.Close()
-	if err := os.Rename(tmp, outPath); err != nil {
-		return err
-	}
-	fmt.Printf("Artifact downloaded to %s\n", outPath)
-	return nil
 }
 
 func runDownload(cmd *cobra.Command, args []string) {

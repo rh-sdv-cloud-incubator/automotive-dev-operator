@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,75 +32,92 @@ import (
 type APIServer struct {
 	server *http.Server
 	addr   string
+	log    logr.Logger
 }
+
+type ctxKeyReqID struct{}
 
 // NewAPIServer creates a new API server runnable
 func NewAPIServer(addr string) *APIServer {
-	return &APIServer{
-		addr:   addr,
-		server: &http.Server{Addr: addr, Handler: createHandler()},
-	}
+	a := &APIServer{addr: addr}
+	a.log = logr.Discard()
+	a.server = &http.Server{Addr: addr, Handler: a.createHandler()}
+	return a
+}
+
+func NewAPIServerWithLogger(addr string, logger logr.Logger) *APIServer {
+	a := &APIServer{addr: addr, log: logger}
+	a.server = &http.Server{Addr: addr, Handler: a.createHandler()}
+	return a
 }
 
 // Start implements manager.Runnable
 func (a *APIServer) Start(ctx context.Context) error {
 
 	go func() {
-		log.Printf("build-api listening on %s", a.addr)
+		a.log.Info("build-api listening", "addr", a.addr)
 		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("build-api server error: %v", err)
+			a.log.Error(err, "build-api server error")
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("shutting down build-api server...")
+	a.log.Info("shutting down build-api server...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := a.server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("build-api server forced to shutdown: %v", err)
+		a.log.Error(err, "build-api server forced to shutdown")
 		return err
 	}
-	log.Println("build-api server exited")
+	a.log.Info("build-api server exited")
 	return nil
 }
 
-func createHandler() http.Handler {
+func (a *APIServer) createHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/v1/builds", handleBuilds)
-	mux.HandleFunc("/v1/builds/", handleBuildByName)
-	return mux
+	mux.HandleFunc("/v1/builds", a.handleBuilds)
+	mux.HandleFunc("/v1/builds/", a.handleBuildByName)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// attach a request ID for correlation
+		reqID := uuid.New().String()
+		ctx := context.WithValue(r.Context(), ctxKeyReqID{}, reqID)
+		a.log.Info("http request", "method", r.Method, "path", r.URL.Path, "reqID", reqID)
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // StartServer starts the REST API server on the given address in a goroutine and returns the server
 func StartServer(addr string) (*http.Server, error) {
-	server := &http.Server{Addr: addr, Handler: createHandler()}
-	apiServer := &APIServer{addr: addr, server: server}
+	api := NewAPIServer(addr)
+	server := api.server
 	go func() {
-		if err := apiServer.Start(context.Background()); err != nil {
-			log.Printf("StartServer error: %v", err)
+		if err := api.Start(context.Background()); err != nil {
+			// no logger available here
 		}
 	}()
 	return server, nil
 }
 
-func handleBuilds(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
+		a.log.Info("create build")
 		createBuild(w, r)
 	case http.MethodGet:
+		a.log.Info("list builds")
 		listBuilds(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func handleBuildByName(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 3 {
 		http.NotFound(w, r)
@@ -112,16 +130,20 @@ func handleBuildByName(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 4 {
 			switch parts[3] {
 			case "logs":
+				a.log.Info("logs requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 				streamLogs(w, r, name)
 				return
 			case "artifact":
+				a.log.Info("artifact requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 				streamArtifact(w, r, name)
 				return
 			}
 		}
+		a.log.Info("get build", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 		getBuild(w, r, name)
 	case http.MethodPost:
 		if len(parts) == 4 && parts[3] == "uploads" {
+			a.log.Info("uploads", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 			uploadFiles(w, r, name)
 			return
 		}
@@ -426,7 +448,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := setOwnerRef(ctx, k8sClient, namespace, cfgName, imageBuild); err != nil {
-		log.Printf("warning: failed to set owner on ConfigMap: %v", err)
+		// best-effort
 	}
 
 	writeJSON(w, http.StatusAccepted, BuildResponse{
