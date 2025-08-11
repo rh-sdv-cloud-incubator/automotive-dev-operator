@@ -15,6 +15,7 @@ import (
 
 	buildapitypes "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/buildapi/client"
+	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -415,52 +416,43 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 				return err
 			}
 			if cl := strings.TrimSpace(resp.Header.Get("Content-Length")); cl != "" {
-				done := make(chan struct{})
-				var written int64
-				go func() {
-					ticker := time.NewTicker(1 * time.Second)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-done:
-							return
-						case <-ticker.C:
-							fmt.Printf("Downloaded %.2f MB\n", float64(written)/(1024*1024))
-						}
-					}
-				}()
-				copyErr := func() error {
-					buf := make([]byte, 1024*128)
-					for {
-						n, er := resp.Body.Read(buf)
-						if n > 0 {
-							if _, ew := f.Write(buf[:n]); ew != nil {
-								return ew
-							}
-							written += int64(n)
-						}
-						if er == io.EOF {
-							break
-						}
-						if er != nil {
-							return er
-						}
-					}
-					return nil
-				}()
-				close(done)
-				if copyErr != nil {
+				// Known size: nice progress bar
+				// Convert to int64
+				var total int64
+				fmt.Sscan(cl, &total)
+				bar := progressbar.NewOptions64(
+					total,
+					progressbar.OptionSetDescription("Downloading"),
+					progressbar.OptionShowBytes(true),
+					progressbar.OptionSetWidth(15),
+					progressbar.OptionThrottle(65*time.Millisecond),
+					progressbar.OptionShowCount(),
+					progressbar.OptionClearOnFinish(),
+				)
+				reader := io.TeeReader(resp.Body, bar)
+				if _, copyErr := io.Copy(f, reader); copyErr != nil {
 					f.Close()
 					os.Remove(tmp)
 					return copyErr
 				}
+				_ = bar.Finish()
+				fmt.Println()
 			} else {
-				// unknown size
-				if _, copyErr := io.Copy(f, resp.Body); copyErr != nil {
+				// Unknown size: indeterminate progress bar
+				bar := progressbar.NewOptions(
+					-1,
+					progressbar.OptionSetDescription("Downloading"),
+					progressbar.OptionSpinnerType(14),
+					progressbar.OptionClearOnFinish(),
+				)
+				reader := io.TeeReader(resp.Body, bar)
+				if _, copyErr := io.Copy(f, reader); copyErr != nil {
 					f.Close()
 					os.Remove(tmp)
 					return copyErr
 				}
+				_ = bar.Finish()
+				fmt.Println()
 			}
 			resp.Body.Close()
 			f.Close()
