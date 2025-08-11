@@ -259,7 +259,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 							fmt.Println("Streaming logs...")
 							io.Copy(os.Stdout, resp2.Body)
 							resp2.Body.Close()
-							followLogs = false
+							followLogs = userFollowRequested
 						} else if resp2 != nil {
 							body, _ := io.ReadAll(resp2.Body)
 							msg := strings.TrimSpace(string(body))
@@ -294,7 +294,13 @@ func runBuild(cmd *cobra.Command, args []string) {
 						}
 					}
 					if st.Phase == "Completed" {
-						if download && st.ArtifactURL != "" {
+						if download {
+							if err := downloadArtifactViaAPI(ctx, serverURL, resp.Name, outputDir); err != nil {
+								fmt.Printf("Download via API failed: %v\n", err)
+							}
+							return
+						}
+						if exposeRoute && st.ArtifactURL != "" {
 							fmt.Printf("Artifact available: %s\n", st.ArtifactURL)
 						}
 						return
@@ -908,6 +914,51 @@ func downloadArtifacts(imageBuild *automotivev1.ImageBuild) {
 	} else {
 		fmt.Printf("Artifact downloaded but unable to get file info: %v\n", err)
 	}
+}
+
+func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) error {
+	if strings.TrimSpace(outDir) == "" {
+		outDir = "./output"
+	}
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/builds/"+url.PathEscape(name)+"/artifact", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	filename := name + ".artifact"
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if i := strings.Index(cd, "filename="); i >= 0 {
+			f := strings.Trim(cd[i+9:], "\" ")
+			if f != "" {
+				filename = f
+			}
+		}
+	}
+	outPath := filepath.Join(outDir, filename)
+	tmp := outPath + ".partial"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	if err := os.Rename(tmp, outPath); err != nil {
+		return err
+	}
+	fmt.Printf("Artifact downloaded to %s\n", outPath)
+	return nil
 }
 
 func getRESTConfig() (*rest.Config, error) {
