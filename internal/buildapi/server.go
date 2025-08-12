@@ -442,13 +442,10 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ExportFormat:           string(req.ExportFormat),
 			Mode:                   string(req.Mode),
 			AutomotiveImageBuilder: req.AutomotiveImageBuilder,
-			StorageClass:           req.StorageClass,
-			RuntimeClassName:       req.RuntimeClassName,
 			ServeArtifact:          req.ServeArtifact,
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       strings.Contains(req.Manifest, "source_path"),
-			ExposeRoute:            req.ExposeRoute,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {

@@ -21,7 +21,6 @@ import (
 
 var (
 	serverURL              string
-	namespace              string
 	imageBuildCfg          string
 	manifest               string
 	buildName              string
@@ -31,13 +30,10 @@ var (
 	exportFormat           string
 	mode                   string
 	automotiveImageBuilder string
-	storageClass           string
-	runtimeClassName       string
 	outputDir              string
 	timeout                int
 	waitForBuild           bool
 	download               bool
-	exposeRoute            bool
 	customDefs             []string
 	followLogs             bool
 	version                string
@@ -82,25 +78,17 @@ func main() {
 	buildCmd.Flags().StringVar(&exportFormat, "export-format", "image", "export format (image, qcow2)")
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
 	buildCmd.Flags().StringVar(&automotiveImageBuilder, "automotive-image-builder", "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0", "container image for automotive-image-builder")
-	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class for build PVC")
-	buildCmd.Flags().StringVar(&runtimeClassName, "runtime-class", "", "runtime class name for build pods")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
-	buildCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
 	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
-	buildCmd.Flags().StringVarP(&namespace, "namespace", "n", "automotive-dev-operator-system", "namespace where the ImageBuild exists")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
-	downloadCmd.Flags().MarkHidden("namespace")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
 	downloadCmd.Flags().StringVar(&outputDir, "output-dir", "./output", "directory to save artifacts")
-	downloadCmd.Flags().BoolVarP(&exposeRoute, "route", "r", false, "use a route for downloading artifacts")
 	downloadCmd.MarkFlagRequired("name")
-
-	listCmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "namespace to list ImageBuilds from")
 
 	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd)
 
@@ -132,7 +120,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 			handleError(fmt.Errorf("error reading manifest: %w", err))
 		}
 
-		// Validate and parse bounded type fields
 		parsedDistro, err := buildapitypes.ParseDistro(distro)
 		if err != nil {
 			handleError(err)
@@ -169,12 +156,9 @@ func runBuild(cmd *cobra.Command, args []string) {
 			ExportFormat:           parsedExportFormat,
 			Mode:                   parsedMode,
 			AutomotiveImageBuilder: automotiveImageBuilder,
-			StorageClass:           storageClass,
-			RuntimeClassName:       runtimeClassName,
 			CustomDefs:             customDefs,
 			AIBExtraArgs:           aibArgsArray,
-			ServeArtifact:          download || exposeRoute,
-			ExposeRoute:            exposeRoute,
+			ServeArtifact:          download,
 		}
 
 		resp, err := api.CreateBuild(ctx, req)
@@ -194,17 +178,52 @@ func runBuild(cmd *cobra.Command, args []string) {
 				}
 			}
 
+			fmt.Println("Waiting for upload server to be ready...")
+			readyCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			for {
+				if err := readyCtx.Err(); err != nil {
+					handleError(fmt.Errorf("timed out waiting for upload server to be ready"))
+				}
+				reqCtx, c := context.WithTimeout(ctx, 15*time.Second)
+				st, err := api.GetBuild(reqCtx, resp.Name)
+				c()
+				if err == nil {
+					if st.Phase == "Uploading" {
+						break
+					}
+					if st.Phase == "Failed" {
+						handleError(fmt.Errorf("build failed while waiting for upload server: %s", st.Message))
+					}
+				}
+				time.Sleep(3 * time.Second)
+			}
+
 			uploads := make([]buildapiclient.Upload, 0, len(localRefs))
 			for _, ref := range localRefs {
 				uploads = append(uploads, buildapiclient.Upload{SourcePath: ref["source_path"], DestPath: ref["source_path"]})
 			}
-			if err := api.UploadFiles(ctx, resp.Name, uploads); err != nil {
-				handleError(fmt.Errorf("upload files failed: %w", err))
+
+			uploadDeadline := time.Now().Add(10 * time.Minute)
+			for {
+				if err := api.UploadFiles(ctx, resp.Name, uploads); err != nil {
+					lower := strings.ToLower(err.Error())
+					if time.Now().After(uploadDeadline) {
+						handleError(fmt.Errorf("upload files failed: %w", err))
+					}
+					if strings.Contains(lower, "503") || strings.Contains(lower, "service unavailable") || strings.Contains(lower, "upload pod not ready") {
+						fmt.Println("Upload server not ready yet. Retrying...")
+						time.Sleep(5 * time.Second)
+						continue
+					}
+					handleError(fmt.Errorf("upload files failed: %w", err))
+				}
+				break
 			}
 			fmt.Println("Local files uploaded. Build will proceed.")
 		}
 
-		if waitForBuild || followLogs || download || exposeRoute {
+		if waitForBuild || followLogs || download {
 			fmt.Println("Waiting for build to complete...")
 			timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Minute)
 			defer cancel()
@@ -229,11 +248,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 						} else if resp2 != nil {
 							body, _ := io.ReadAll(resp2.Body)
 							msg := strings.TrimSpace(string(body))
-							if resp2.StatusCode == http.StatusServiceUnavailable {
-								if !logFollowWarned && msg != "" {
-									fmt.Printf("log stream unavailable: %s\n", msg)
+							if resp2.StatusCode == http.StatusServiceUnavailable || resp2.StatusCode == http.StatusGatewayTimeout {
+								if !logFollowWarned {
+									fmt.Println("log stream not ready (HTTP", resp2.StatusCode, "). Retrying…")
 									logFollowWarned = true
 								}
+								// treat as transient; keep trying silently afterwards
 							} else {
 								if msg != "" {
 									fmt.Printf("log stream error (%d): %s\n", resp2.StatusCode, msg)
@@ -265,9 +285,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 								fmt.Printf("Download via API failed: %v\n", err)
 							}
 							return
-						}
-						if exposeRoute && st.ArtifactURL != "" {
-							fmt.Printf("Artifact available: %s\n", st.ArtifactURL)
 						}
 						return
 					}
@@ -438,7 +455,6 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 				_ = bar.Finish()
 				fmt.Println()
 			} else {
-				// Unknown size: indeterminate progress bar
 				bar := progressbar.NewOptions(
 					-1,
 					progressbar.OptionSetDescription("Downloading"),
@@ -503,16 +519,7 @@ func runDownload(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	if (exposeRoute || cmd.Flags().Changed("route")) && st.ArtifactURL != "" {
-		fileName := st.ArtifactFileName
-		if fileName == "" {
-			fileName = buildName
-		}
-		fmt.Printf("Artifact available for download at: %s/workspace/shared/%s\n", st.ArtifactURL, fileName)
-		if cmd.Flags().Changed("route") && !cmd.Flags().Changed("output-dir") {
-			return
-		}
-	}
+	// Route exposure is not supported via CLI options
 
 	if err := downloadArtifactViaAPI(ctx, serverURL, buildName, outputDir); err != nil {
 		fmt.Printf("Download failed: %v\n", err)

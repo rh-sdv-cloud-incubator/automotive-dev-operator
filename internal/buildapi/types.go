@@ -88,12 +88,9 @@ type BuildRequest struct {
 	ExportFormat           ExportFormat `json:"exportFormat"`
 	Mode                   Mode         `json:"mode"`
 	AutomotiveImageBuilder string       `json:"automotiveImageBuilder"`
-	StorageClass           string       `json:"storageClass"`
-	RuntimeClassName       string       `json:"runtimeClassName"`
 	CustomDefs             []string     `json:"customDefs"`
 	AIBExtraArgs           []string     `json:"aibExtraArgs"`
 	ServeArtifact          bool         `json:"serveArtifact"`
-	ExposeRoute            bool         `json:"exposeRoute"`
 }
 
 // BuildResponse is returned by POST and GET build operations

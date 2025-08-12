@@ -29,6 +29,11 @@ if yq eval '.content.add_files' "$workspace_manifest.tmp" | grep -q '^[^#]'; the
   for idx in $indices; do
     yq eval -i ".content.add_files[$idx].source_path = \"$(workspaces.shared-workspace.path)/\" + (.content.add_files[$idx].source // \"\")" "$workspace_manifest.tmp"
   done
+
+  sp_indices=$(yq eval '.content.add_files | to_entries | .[] | select(.value.source_path != null and (.value.source_path | test("^/") | not) and .value.text == null) | .key' "$workspace_manifest.tmp")
+  for idx in $sp_indices; do
+    yq eval -i ".content.add_files[$idx].source_path = \"$(workspaces.shared-workspace.path)/\" + (.content.add_files[$idx].source_path // \"\")" "$workspace_manifest.tmp"
+  done
 fi
 
 if yq eval '.qm.content.add_files' "$workspace_manifest.tmp" | grep -q '^[^#]'; then
@@ -36,6 +41,11 @@ if yq eval '.qm.content.add_files' "$workspace_manifest.tmp" | grep -q '^[^#]'; 
 
   for idx in $indices; do
     yq eval -i ".qm.content.add_files[$idx].source_path = \"$(workspaces.shared-workspace.path)/\" + (.qm.content.add_files[$idx].source // \"\")" "$workspace_manifest.tmp"
+  done
+
+  sp_indices=$(yq eval '.qm.content.add_files | to_entries | .[] | select(.value.source_path != null and (.value.source_path | test("^/") | not) and .value.text == null) | .key' "$workspace_manifest.tmp")
+  for idx in $sp_indices; do
+    yq eval -i ".qm.content.add_files[$idx].source_path = \"$(workspaces.shared-workspace.path)/\" + (.qm.content.add_files[$idx].source_path // \"\")" "$workspace_manifest.tmp"
   done
 fi
 
