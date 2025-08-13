@@ -28,7 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
-	authorizationv1 "k8s.io/api/authorization/v1"
+	authnv1 "k8s.io/api/authentication/v1"
 )
 
 type APIServer struct {
@@ -1180,44 +1180,31 @@ func getClientFromRequest(r *http.Request) (client.Client, error) {
 }
 
 func isAuthenticated(r *http.Request) bool {
-	// Try to get the bearer token from the Authorization header
+	// Extract bearer token
 	authHeader := r.Header.Get("Authorization")
-	bearerToken := ""
+	token := ""
 	if strings.HasPrefix(authHeader, "Bearer ") {
-		bearerToken = strings.TrimPrefix(authHeader, "Bearer ")
+		token = strings.TrimPrefix(authHeader, "Bearer ")
 	}
-	// Also check for X-Forwarded-Access-Token header from OAuth proxy
-	if bearerToken == "" {
-		bearerToken = r.Header.Get("X-Forwarded-Access-Token")
+	if token == "" {
+		token = r.Header.Get("X-Forwarded-Access-Token")
 	}
-
-	// No token means not authenticated
-	if bearerToken == "" {
+	if strings.TrimSpace(token) == "" {
 		return false
 	}
 
-	// Validate the token by making a simple API call
+	// Validate token cryptographically via TokenReview; no per-user RBAC check
 	cfg, err := getRESTConfigFromRequest(r)
 	if err != nil {
 		return false
 	}
-
-	// Try to create a client and do a simple check
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return false
 	}
-
-	// Perform a self subject access review to validate the token
-	_, err = clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(r.Context(), &authorizationv1.SelfSubjectAccessReview{
-		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Verb:     "list",
-				Resource: "imagebuilds",
-				Group:    "automotive.sdv.cloud.redhat.com",
-			},
-		},
-	}, metav1.CreateOptions{})
-
-	return err == nil
+	tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
+	if _, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{}); err != nil {
+		return false
+	}
+	return true
 }
