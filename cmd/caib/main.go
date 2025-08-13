@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -521,17 +522,19 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 			}
 			fmt.Printf("Artifact downloaded to %s\n", outPath)
 
-			// If the artifact is a tar archive (directory export), extract it to a folder
+			// If the artifact is a tar archive (directory export), optionally extract it
 			if strings.HasPrefix(contentType, "application/x-tar") || strings.HasPrefix(contentType, "application/gzip") || strings.HasSuffix(strings.ToLower(outPath), ".tar") || strings.HasSuffix(strings.ToLower(outPath), ".tar.gz") {
-				destDir := strings.TrimSuffix(outPath, ".tar")
-				destDir = strings.TrimSuffix(destDir, ".gz")
-				if err := os.MkdirAll(destDir, 0o755); err != nil {
-					return fmt.Errorf("create extract dir: %w", err)
+				if !compressArtifacts {
+					destDir := strings.TrimSuffix(outPath, ".tar")
+					destDir = strings.TrimSuffix(destDir, ".gz")
+					if err := os.MkdirAll(destDir, 0o755); err != nil {
+						return fmt.Errorf("create extract dir: %w", err)
+					}
+					if err := extractTar(outPath, destDir); err != nil {
+						return fmt.Errorf("extract tar: %w", err)
+					}
+					fmt.Printf("Extracted to %s\n", destDir)
 				}
-				if err := extractTar(outPath, destDir); err != nil {
-					return fmt.Errorf("extract tar: %w", err)
-				}
-				fmt.Printf("Extracted to %s\n", destDir)
 			}
 			return nil
 		}
@@ -683,6 +686,23 @@ func runList(cmd *cobra.Command, args []string) {
 
 func loadTokenFromKubeconfig() (string, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	// First, ask client-go to build a client config. This will execute any exec credential plugins
+	// (e.g., OpenShift login) and populate a usable BearerToken.
+	deferred := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
+	if restCfg, err := deferred.ClientConfig(); err == nil && restCfg != nil {
+		if t := strings.TrimSpace(restCfg.BearerToken); t != "" {
+			return t, nil
+		}
+		if f := strings.TrimSpace(restCfg.BearerTokenFile); f != "" {
+			if b, rerr := os.ReadFile(f); rerr == nil {
+				if t := strings.TrimSpace(string(b)); t != "" {
+					return t, nil
+				}
+			}
+		}
+	}
+
+	// Fallback to parsing raw kubeconfig for legacy token fields
 	rawCfg, err := loadingRules.Load()
 	if err != nil || rawCfg == nil {
 		return "", fmt.Errorf("cannot load kubeconfig: %w", err)
@@ -711,6 +731,16 @@ func loadTokenFromKubeconfig() (string, error) {
 		}
 		if t := strings.TrimSpace(ai.AuthProvider.Config["token"]); t != "" {
 			return t, nil
+		}
+	}
+	// Exec-based auth providers (e.g., OpenShift, OIDC with exec) may store the token after running the exec plugin.
+	// As an extra best-effort, try `oc whoami -t` when available.
+	if path, err := exec.LookPath("oc"); err == nil && path != "" {
+		out, err := exec.Command(path, "whoami", "-t").Output()
+		if err == nil {
+			if t := strings.TrimSpace(string(out)); t != "" {
+				return t, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("no bearer token found in kubeconfig")

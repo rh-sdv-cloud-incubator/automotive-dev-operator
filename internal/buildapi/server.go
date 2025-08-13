@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 )
 
 type APIServer struct {
@@ -114,6 +115,12 @@ func StartServer(addr string) (*http.Server, error) {
 }
 
 func (a *APIServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
+	// Validate authentication
+	if !isAuthenticated(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPost:
 		a.log.Info("create build")
@@ -127,12 +134,21 @@ func (a *APIServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
+	// Validate authentication (except for healthz)
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 3 {
 		http.NotFound(w, r)
 		return
 	}
 	name := parts[2]
+
+	// Skip auth for healthz endpoint
+	if !(len(parts) == 2 && parts[1] == "healthz") {
+		if !isAuthenticated(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -169,7 +185,7 @@ func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -192,7 +208,12 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
 		return
 	}
-	quickCS, err := kubernetes.NewForConfig(mustGetRESTConfig())
+	restCfg, err := getRESTConfigFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	quickCS, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -204,7 +225,7 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	podName = pods.Items[0].Name
 
-	cfg, err := getRESTConfig()
+	cfg, err := getRESTConfigFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -311,14 +332,6 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	}
 }
 
-func mustGetRESTConfig() *rest.Config {
-	cfg, err := getRESTConfig()
-	if err != nil {
-		panic(err)
-	}
-	return cfg
-}
-
 func splitPath(p string) []string {
 	if len(p) > 0 && p[0] == '/' {
 		p = p[1:]
@@ -344,6 +357,8 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
+
+	needsUpload := strings.Contains(req.Manifest, "source_path")
 
 	if req.Name == "" || req.Manifest == "" {
 		http.Error(w, "name and manifest are required", http.StatusBadRequest)
@@ -393,7 +408,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		req.ManifestFileName = "manifest.aib.yml"
 	}
 
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -466,7 +481,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ServeArtifact:          req.ServeArtifact,
 			ServeExpiryHours:       24,
 			ManifestConfigMap:      cfgName,
-			InputFilesServer:       strings.Contains(req.Manifest, "source_path"),
+			InputFilesServer:       needsUpload,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -488,7 +503,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 func listBuilds(w http.ResponseWriter, r *http.Request) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -524,7 +539,7 @@ func listBuilds(w http.ResponseWriter, r *http.Request) {
 
 func getBuild(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -565,7 +580,7 @@ func getBuild(w http.ResponseWriter, r *http.Request, name string) {
 // getBuildTemplate returns a BuildRequest-like struct representing the inputs that produced a given build
 func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -649,7 +664,7 @@ func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
 func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -695,7 +710,7 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
-	restCfg, err := getRESTConfig()
+	restCfg, err := getRESTConfigFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
 		return
@@ -766,7 +781,7 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
 	ctx := r.Context()
 
-	k8sClient, err := getClientFromEnv()
+	k8sClient, err := getClientFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
 		return
@@ -838,7 +853,7 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		time.Sleep(3 * time.Second)
 	}
 
-	restCfg, err := getRESTConfig()
+	restCfg, err := getRESTConfigFromRequest(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
 		return
@@ -1043,20 +1058,6 @@ func copyFileToPod(config *rest.Config, namespace, podName, containerName, local
 	return executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{Stdin: pr, Stdout: io.Discard, Stderr: io.Discard})
 }
 
-func getRESTConfig() (*rest.Config, error) {
-	cfg, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-	cfgCopy := rest.CopyConfig(cfg)
-	cfgCopy.Timeout = 10 * time.Minute
-	return cfgCopy, nil
-}
-
 func getClientFromEnv() (client.Client, error) {
 	var cfg *rest.Config
 	var err error
@@ -1116,4 +1117,107 @@ func resolveNamespace() string {
 		}
 	}
 	return "default"
+}
+
+func getRESTConfigFromRequest(r *http.Request) (*rest.Config, error) {
+	// Try to get the bearer token from the Authorization header
+	authHeader := r.Header.Get("Authorization")
+	bearerToken := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		bearerToken = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	// Also check for X-Forwarded-Access-Token header from OAuth proxy
+	if bearerToken == "" {
+		bearerToken = r.Header.Get("X-Forwarded-Access-Token")
+	}
+
+	// Start with the base config
+	var cfg *rest.Config
+	var err error
+	cfg, err = rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build kube config: %w", err)
+		}
+	}
+
+	// If we have a bearer token from the request, use it
+	if bearerToken != "" {
+		cfgCopy := rest.CopyConfig(cfg)
+		cfgCopy.BearerToken = bearerToken
+		cfgCopy.BearerTokenFile = "" // Clear any token file to use the explicit token
+		cfgCopy.Timeout = 10 * time.Minute
+		return cfgCopy, nil
+	}
+
+	// Otherwise use the default config
+	cfgCopy := rest.CopyConfig(cfg)
+	cfgCopy.Timeout = 10 * time.Minute
+	return cfgCopy, nil
+}
+
+func getClientFromRequest(r *http.Request) (client.Client, error) {
+	cfg, err := getRESTConfigFromRequest(r)
+	if err != nil {
+		return nil, err
+	}
+
+	scheme := runtime.NewScheme()
+	if err := automotivev1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add automotive scheme: %w", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add core scheme: %w", err)
+	}
+
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create k8s client: %w", err)
+	}
+	return c, nil
+}
+
+func isAuthenticated(r *http.Request) bool {
+	// Try to get the bearer token from the Authorization header
+	authHeader := r.Header.Get("Authorization")
+	bearerToken := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		bearerToken = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	// Also check for X-Forwarded-Access-Token header from OAuth proxy
+	if bearerToken == "" {
+		bearerToken = r.Header.Get("X-Forwarded-Access-Token")
+	}
+
+	// No token means not authenticated
+	if bearerToken == "" {
+		return false
+	}
+
+	// Validate the token by making a simple API call
+	cfg, err := getRESTConfigFromRequest(r)
+	if err != nil {
+		return false
+	}
+
+	// Try to create a client and do a simple check
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return false
+	}
+
+	// Perform a self subject access review to validate the token
+	_, err = clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(r.Context(), &authorizationv1.SelfSubjectAccessReview{
+		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Verb:     "list",
+				Resource: "imagebuilds",
+				Group:    "automotive.sdv.cloud.redhat.com",
+			},
+		},
+	}, metav1.CreateOptions{})
+
+	return err == nil
 }

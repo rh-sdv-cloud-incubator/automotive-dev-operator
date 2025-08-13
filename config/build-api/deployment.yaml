@@ -47,14 +47,16 @@ spec:
         args:
         - --provider=openshift
         - --http-address=:8081
+        - --https-address=
         - --upstream=http://127.0.0.1:8080
         - --openshift-service-account=controller-manager
         - --cookie-secret=$(COOKIE_SECRET)
-        - --pass-user-bearer-token
-        - --pass-access-token
+        - --pass-user-bearer-token=true
+        - --pass-access-token=true
         - --request-logging=true
         - --skip-auth-regex=^/v1/healthz$
         - --email-domain=*
+        - --skip-provider-button=true
         env:
         - name: COOKIE_SECRET
           valueFrom:
