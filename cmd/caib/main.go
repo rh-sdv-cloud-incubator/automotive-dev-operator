@@ -19,6 +19,7 @@ import (
 	buildapiclient "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/buildapi/client"
 	progressbar "github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -42,6 +43,7 @@ var (
 	aibExtraArgs           string
 	aibOverrideArgs        string
 	compressArtifacts      bool
+	authToken              string
 )
 
 func main() {
@@ -73,6 +75,7 @@ func main() {
 	}
 
 	buildCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
+	buildCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication (e.g., OpenShift access token)")
 	buildCmd.Flags().StringVar(&imageBuildCfg, "config", "", "path to ImageBuild YAML configuration file")
 	buildCmd.Flags().StringVar(&manifest, "manifest", "", "path to manifest YAML file for the build")
 	buildCmd.Flags().StringVar(&buildName, "name", "", "name for the ImageBuild")
@@ -92,10 +95,14 @@ func main() {
 	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder (bypasses defaults except internal requirements)")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
+	downloadCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication (e.g., OpenShift access token)")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
 	downloadCmd.Flags().StringVar(&outputDir, "output-dir", "./output", "directory to save artifacts")
 	downloadCmd.MarkFlagRequired("name")
 	downloadCmd.Flags().BoolVar(&compressArtifacts, "compress", true, "compress directory artifacts (tar.gz). For directories, server always compresses.")
+
+	listCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
+	listCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication (e.g., OpenShift access token)")
 
 	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd)
 
@@ -117,7 +124,16 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 
 	if serverURL != "" {
-		api, err := buildapiclient.New(serverURL)
+		if strings.TrimSpace(authToken) == "" {
+			if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+				authToken = tok
+			}
+		}
+		var opts []buildapiclient.Option
+		if strings.TrimSpace(authToken) != "" {
+			opts = append(opts, buildapiclient.WithAuthToken(strings.TrimSpace(authToken)))
+		}
+		api, err := buildapiclient.New(serverURL, opts...)
 		if err != nil {
 			handleError(err)
 		}
@@ -251,6 +267,9 @@ func runBuild(cmd *cobra.Command, args []string) {
 				case <-ticker.C:
 					if followLogs {
 						req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(serverURL, "/")+"/v1/builds/"+url.PathEscape(resp.Name)+"/logs?follow=1", nil)
+						if strings.TrimSpace(authToken) != "" {
+							req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
+						}
 						resp2, err := http.DefaultClient.Do(req)
 						if err == nil && resp2.StatusCode == http.StatusOK {
 							fmt.Println("Streaming logs...")
@@ -421,6 +440,9 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 			return fmt.Errorf("timed out waiting for artifact to become ready")
 		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+		if strings.TrimSpace(authToken) != "" {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			time.Sleep(3 * time.Second)
@@ -529,14 +551,12 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 	}
 }
 
-// extractTar extracts a .tar archive at tarPath into destDir.
 func extractTar(tarPath, destDir string) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	// Support gzip-compressed tarballs transparently
 	var r io.Reader = f
 	if strings.HasSuffix(strings.ToLower(tarPath), ".gz") {
 		gr, gzErr := gzip.NewReader(f)
@@ -560,7 +580,7 @@ func extractTar(tarPath, destDir string) error {
 			if err := os.MkdirAll(targetPath, 0o755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 				return err
 			}
@@ -595,13 +615,21 @@ func runDownload(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	api, err := buildapiclient.New(serverURL)
+	if strings.TrimSpace(authToken) == "" {
+		if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+			authToken = tok
+		}
+	}
+	var opts []buildapiclient.Option
+	if strings.TrimSpace(authToken) != "" {
+		opts = append(opts, buildapiclient.WithAuthToken(strings.TrimSpace(authToken)))
+	}
+	api, err := buildapiclient.New(serverURL, opts...)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Query build status via REST
 	st, err := api.GetBuild(ctx, buildName)
 	if err != nil {
 		fmt.Printf("Error getting build %s: %v\n", buildName, err)
@@ -611,8 +639,6 @@ func runDownload(cmd *cobra.Command, args []string) {
 		fmt.Printf("Build %s is not completed (status: %s). Cannot download artifacts.\n", buildName, st.Phase)
 		os.Exit(1)
 	}
-
-	// Route exposure is not supported via CLI options
 
 	if err := downloadArtifactViaAPI(ctx, serverURL, buildName, outputDir); err != nil {
 		fmt.Printf("Download failed: %v\n", err)
@@ -626,7 +652,16 @@ func runList(cmd *cobra.Command, args []string) {
 		fmt.Println("Error: --server is required (or set CAIB_SERVER)")
 		os.Exit(1)
 	}
-	api, err := buildapiclient.New(serverURL)
+	if strings.TrimSpace(authToken) == "" {
+		if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+			authToken = tok
+		}
+	}
+	var opts []buildapiclient.Option
+	if strings.TrimSpace(authToken) != "" {
+		opts = append(opts, buildapiclient.WithAuthToken(strings.TrimSpace(authToken)))
+	}
+	api, err := buildapiclient.New(serverURL, opts...)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -644,4 +679,39 @@ func runList(cmd *cobra.Command, args []string) {
 	for _, it := range items {
 		fmt.Printf("%-20s %-12s %-20s %-20s %-20s\n", it.Name, it.Phase, it.Message, it.CreatedAt, "")
 	}
+}
+
+func loadTokenFromKubeconfig() (string, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	rawCfg, err := loadingRules.Load()
+	if err != nil || rawCfg == nil {
+		return "", fmt.Errorf("cannot load kubeconfig: %w", err)
+	}
+	ctxName := rawCfg.CurrentContext
+	if strings.TrimSpace(ctxName) == "" {
+		return "", fmt.Errorf("no current kube context")
+	}
+	ctx := rawCfg.Contexts[ctxName]
+	if ctx == nil {
+		return "", fmt.Errorf("missing context %s", ctxName)
+	}
+	ai := rawCfg.AuthInfos[ctx.AuthInfo]
+	if ai == nil {
+		return "", fmt.Errorf("missing auth info for context %s", ctxName)
+	}
+	if strings.TrimSpace(ai.Token) != "" {
+		return strings.TrimSpace(ai.Token), nil
+	}
+	if ai.AuthProvider != nil && ai.AuthProvider.Config != nil {
+		if t := strings.TrimSpace(ai.AuthProvider.Config["access-token"]); t != "" {
+			return t, nil
+		}
+		if t := strings.TrimSpace(ai.AuthProvider.Config["id-token"]); t != "" {
+			return t, nil
+		}
+		if t := strings.TrimSpace(ai.AuthProvider.Config["token"]); t != "" {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("no bearer token found in kubeconfig")
 }

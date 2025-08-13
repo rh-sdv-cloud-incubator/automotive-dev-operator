@@ -41,4 +41,36 @@ spec:
           name: http
         securityContext:
           allowPrivilegeEscalation: false
+      - name: oauth-proxy
+        image: registry.redhat.io/openshift4/ose-oauth-proxy:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - --provider=openshift
+        - --http-address=:8081
+        - --upstream=http://127.0.0.1:8080
+        - --openshift-service-account=controller-manager
+        - --cookie-secret=$(COOKIE_SECRET)
+        - --pass-user-bearer-token
+        - --pass-access-token
+        - --request-logging=true
+        - --skip-auth-regex=^/v1/healthz$
+        - --email-domain=*
+        env:
+        - name: COOKIE_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: build-api-oauth-proxy
+              key: cookie-secret
+        ports:
+        - containerPort: 8081
+          name: proxy-http
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
 

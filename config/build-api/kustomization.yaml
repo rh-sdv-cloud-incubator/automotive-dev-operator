@@ -11,3 +11,8 @@ images:
   newName: quay.io/rh-sdv-cloud/automotive-dev-operator
   newTag: latest
 
+secretGenerator:
+- name: build-api-oauth-proxy
+  literals:
+  - cookie-secret=YWFhYWFhYWFhYWFhYWFhYQ==
+
