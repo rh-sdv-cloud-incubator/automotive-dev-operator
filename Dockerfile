@@ -1,5 +1,7 @@
 # Build the manager binary
 FROM golang:1.24 AS builder
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -15,8 +17,9 @@ COPY cmd/build-api/main.go cmd/build-api/main.go
 COPY api/ api/
 COPY internal/ internal/
 
-RUN CGO_ENABLED=0 go build -a -o manager cmd/main.go
-RUN CGO_ENABLED=0 go build -a -o build-api cmd/build-api/main.go
+ENV CGO_ENABLED=0
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o manager cmd/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

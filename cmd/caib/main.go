@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -38,6 +40,8 @@ var (
 	followLogs             bool
 	version                string
 	aibExtraArgs           string
+	aibOverrideArgs        string
+	compressArtifacts      bool
 )
 
 func main() {
@@ -81,14 +85,17 @@ func main() {
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
+	buildCmd.Flags().BoolVar(&compressArtifacts, "compress", true, "compress directory artifacts (tar.gz). For directories, server always compresses.")
 	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
+	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder (bypasses defaults except internal requirements)")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
 	downloadCmd.Flags().StringVar(&buildName, "name", "", "name of the ImageBuild")
 	downloadCmd.Flags().StringVar(&outputDir, "output-dir", "./output", "directory to save artifacts")
 	downloadCmd.MarkFlagRequired("name")
+	downloadCmd.Flags().BoolVar(&compressArtifacts, "compress", true, "compress directory artifacts (tar.gz). For directories, server always compresses.")
 
 	rootCmd.AddCommand(buildCmd, downloadCmd, listCmd)
 
@@ -142,8 +149,12 @@ func runBuild(cmd *cobra.Command, args []string) {
 		}
 
 		var aibArgsArray []string
+		var aibOverrideArray []string
 		if strings.TrimSpace(aibExtraArgs) != "" {
 			aibArgsArray = strings.Fields(aibExtraArgs)
+		}
+		if strings.TrimSpace(aibOverrideArgs) != "" {
+			aibOverrideArray = strings.Fields(aibOverrideArgs)
 		}
 
 		req := buildapitypes.BuildRequest{
@@ -158,6 +169,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			AutomotiveImageBuilder: automotiveImageBuilder,
 			CustomDefs:             customDefs,
 			AIBExtraArgs:           aibArgsArray,
+			AIBOverrideArgs:        aibOverrideArray,
 			ServeArtifact:          download,
 		}
 
@@ -417,6 +429,7 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 
 		if resp.StatusCode == http.StatusOK {
 			filename := name + ".artifact"
+			contentType := resp.Header.Get("Content-Type")
 			if cd := resp.Header.Get("Content-Disposition"); cd != "" {
 				if i := strings.Index(cd, "filename="); i >= 0 {
 					f := strings.Trim(cd[i+9:], "\" ")
@@ -424,6 +437,15 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 						filename = f
 					}
 				}
+			}
+			if at := strings.TrimSpace(resp.Header.Get("X-AIB-Artifact-Type")); at != "" {
+				fmt.Printf("Artifact type: %s\n", at)
+			}
+			if comp := strings.TrimSpace(resp.Header.Get("X-AIB-Compression")); comp != "" {
+				fmt.Printf("Compression: %s\n", comp)
+			}
+			if root := strings.TrimSpace(resp.Header.Get("X-AIB-Archive-Root")); root != "" {
+				fmt.Printf("Archive root: %s\n", root)
 			}
 			outPath := filepath.Join(outDir, filename)
 			tmp := outPath + ".partial"
@@ -476,6 +498,19 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 				return err
 			}
 			fmt.Printf("Artifact downloaded to %s\n", outPath)
+
+			// If the artifact is a tar archive (directory export), extract it to a folder
+			if strings.HasPrefix(contentType, "application/x-tar") || strings.HasPrefix(contentType, "application/gzip") || strings.HasSuffix(strings.ToLower(outPath), ".tar") || strings.HasSuffix(strings.ToLower(outPath), ".tar.gz") {
+				destDir := strings.TrimSuffix(outPath, ".tar")
+				destDir = strings.TrimSuffix(destDir, ".gz")
+				if err := os.MkdirAll(destDir, 0o755); err != nil {
+					return fmt.Errorf("create extract dir: %w", err)
+				}
+				if err := extractTar(outPath, destDir); err != nil {
+					return fmt.Errorf("extract tar: %w", err)
+				}
+				fmt.Printf("Extracted to %s\n", destDir)
+			}
 			return nil
 		}
 
@@ -492,6 +527,64 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
+}
+
+// extractTar extracts a .tar archive at tarPath into destDir.
+func extractTar(tarPath, destDir string) error {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// Support gzip-compressed tarballs transparently
+	var r io.Reader = f
+	if strings.HasSuffix(strings.ToLower(tarPath), ".gz") {
+		gr, gzErr := gzip.NewReader(f)
+		if gzErr == nil {
+			defer gr.Close()
+			r = gr
+		}
+	}
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(destDir, hdr.Name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return err
+			}
+			if err := os.Symlink(hdr.Linkname, targetPath); err != nil && !os.IsExist(err) {
+				return err
+			}
+		default:
+			// ignore other types
+		}
+	}
+	return nil
 }
 
 func runDownload(cmd *cobra.Command, args []string) {

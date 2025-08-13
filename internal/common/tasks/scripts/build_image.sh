@@ -98,13 +98,17 @@ else
   echo "No custom-definitions.env file found"
 fi
 
-AIB_EXTRA_ARGS=""
+AIB_OVERRIDE_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-override-args.txt"
 AIB_EXTRA_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-extra-args.txt"
-if [ -f "$AIB_EXTRA_ARGS_FILE" ]; then
+AIB_ARGS=""
+if [ -f "$AIB_OVERRIDE_ARGS_FILE" ]; then
+  echo "Using override automotive-image-builder args from $AIB_OVERRIDE_ARGS_FILE"
+  AIB_ARGS="$(cat "$AIB_OVERRIDE_ARGS_FILE")"
+elif [ -f "$AIB_EXTRA_ARGS_FILE" ]; then
   echo "Adding extra automotive-image-builder args from $AIB_EXTRA_ARGS_FILE"
-  AIB_EXTRA_ARGS="$(cat "$AIB_EXTRA_ARGS_FILE")"
+  AIB_ARGS="$(cat "$AIB_EXTRA_ARGS_FILE")"
 else
-  echo "No aib-extra-args.txt file found"
+  echo "No extra/override AIB args file found"
 fi
 
 arch="$(params.target-architecture)"
@@ -127,7 +131,7 @@ build_command="automotive-image-builder --verbose \
   --export $(params.export-format) \
   --osbuild-manifest=/output/image.json \
   $mode_param \
-  $AIB_EXTRA_ARGS \
+  $AIB_ARGS \
   $MANIFEST_FILE \
   /output/${exportFile}"
 
@@ -185,3 +189,9 @@ cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo 
 
 echo "Contents of shared workspace:"
 ls -la $(workspaces.shared-workspace.path)/
+
+if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
+  echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
+  tar -C $(workspaces.shared-workspace.path) -czf $(workspaces.shared-workspace.path)/${exportFile}.tar.gz ${exportFile} || echo "Failed to create ${exportFile}.tar.gz"
+  echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
+fi

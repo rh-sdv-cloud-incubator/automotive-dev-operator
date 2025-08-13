@@ -413,11 +413,12 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 	}
 
 	var fileExtension string
-	if latestImageBuild.Spec.ExportFormat == "image" {
+	switch latestImageBuild.Spec.ExportFormat {
+	case "image":
 		fileExtension = ".raw"
-	} else if latestImageBuild.Spec.ExportFormat == "qcow2" {
+	case "qcow2":
 		fileExtension = ".qcow2"
-	} else {
+	default:
 		fileExtension = fmt.Sprintf(".%s", latestImageBuild.Spec.ExportFormat)
 	}
 

@@ -157,7 +157,7 @@ docker-push: ## Push docker image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/amd6
+PLATFORMS ?= linux/amd64,linux/arm64
 .PHONY: docker-buildx
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
@@ -333,3 +333,25 @@ build-caib: ## Build the caib tool
 .PHONY: build-api-server
 build-api-server: ## Build the api server
 	go build -o bin/build-api cmd/build-api/main.go
+
+##@ WebUI
+
+.PHONY: webui-install
+webui-install: ## Install webui dependencies
+	cd webui && npm install
+
+.PHONY: webui-build
+webui-build: webui-install ## Build the webui
+	cd webui && npm run build
+
+.PHONY: webui-dev
+webui-dev: ## Start webui in development mode
+	cd webui && npm start
+
+.PHONY: webui-docker-build
+webui-docker-build: ## Build webui docker image
+	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --load -t $(IMAGE_TAG_BASE)-webui:latest webui/
+
+.PHONY: webui-docker-push
+webui-docker-push: ## Push webui docker image
+	$(CONTAINER_TOOL) push $(IMAGE_TAG_BASE)-webui:latest

@@ -132,6 +132,25 @@ paths:
               schema:
                 type: string
   /v1/builds/{name}/artifact:
+  /v1/builds/{name}/template:
+    parameters:
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+    get:
+      summary: Get a build's inputs as a template
+      operationId: getBuildTemplate
+      responses:
+        '200':
+          description: Build template
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildTemplateResponse'
+        '404':
+          description: Not found
     parameters:
       - in: path
         name: name
@@ -235,6 +254,15 @@ components:
       properties:
         name:
           type: string
+    BuildTemplateResponse:
+      allOf:
+        - $ref: '#/components/schemas/BuildRequest'
+        - type: object
+          properties:
+            sourceFiles:
+              type: array
+              items:
+                type: string
         phase:
           type: string
         message:

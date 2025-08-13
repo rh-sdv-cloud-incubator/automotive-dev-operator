@@ -146,6 +146,10 @@ func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 				a.log.Info("artifact requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 				streamArtifact(w, r, name)
 				return
+			case "template":
+				a.log.Info("template requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
+				getBuildTemplate(w, r, name)
+				return
 			}
 		}
 		a.log.Info("get build", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
@@ -172,32 +176,33 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	}
 
 	ctx := r.Context()
-	deadline := time.Now().Add(2 * time.Minute)
 	var podName string
 
-	for {
-		if time.Now().After(deadline) {
-			http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+	ib := &automotivev1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		ib := &automotivev1.ImageBuild{}
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err == nil {
-			tr := strings.TrimSpace(ib.Status.TaskRunName)
-			if tr != "" {
-				cs, err := kubernetes.NewForConfig(mustGetRESTConfig())
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/taskRun=" + tr})
-				if err == nil && len(pods.Items) > 0 {
-					podName = pods.Items[0].Name
-					break
-				}
-			}
-		}
-		time.Sleep(2 * time.Second)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	tr := strings.TrimSpace(ib.Status.TaskRunName)
+	if tr == "" {
+		http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+		return
+	}
+	quickCS, err := kubernetes.NewForConfig(mustGetRESTConfig())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pods, err := quickCS.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/taskRun=" + tr})
+	if err != nil || len(pods.Items) == 0 {
+		http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+		return
+	}
+	podName = pods.Items[0].Name
 
 	cfg, err := getRESTConfig()
 	if err != nil {
@@ -208,6 +213,12 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("Waiting for logs...\n"))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 
 	var hadStream bool
@@ -285,6 +296,13 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		}
 
 		time.Sleep(2 * time.Second)
+		if !hadStream {
+			// keep-alive to prevent router/proxy 504s while waiting
+			_, _ = w.Write([]byte("."))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
 	}
 
 	if !hadStream {
@@ -399,7 +417,10 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	if len(req.CustomDefs) > 0 {
 		cmData["custom-definitions.env"] = strings.Join(req.CustomDefs, "\n")
 	}
-	if len(req.AIBExtraArgs) > 0 {
+	if len(req.AIBOverrideArgs) > 0 {
+		// If override is provided, prefer it and ignore the regular extra args
+		cmData["aib-override-args.txt"] = strings.Join(req.AIBOverrideArgs, " ")
+	} else if len(req.AIBExtraArgs) > 0 {
 		cmData["aib-extra-args.txt"] = strings.Join(req.AIBExtraArgs, " ")
 	}
 
@@ -482,11 +503,20 @@ func listBuilds(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]BuildListItem, 0, len(list.Items))
 	for _, b := range list.Items {
+		var startStr, compStr string
+		if b.Status.StartTime != nil {
+			startStr = b.Status.StartTime.Time.Format(time.RFC3339)
+		}
+		if b.Status.CompletionTime != nil {
+			compStr = b.Status.CompletionTime.Time.Format(time.RFC3339)
+		}
 		resp = append(resp, BuildListItem{
-			Name:      b.Name,
-			Phase:     b.Status.Phase,
-			Message:   b.Status.Message,
-			CreatedAt: b.CreationTimestamp.Time.Format(time.RFC3339),
+			Name:           b.Name,
+			Phase:          b.Status.Phase,
+			Message:        b.Status.Message,
+			CreatedAt:      b.CreationTimestamp.Time.Format(time.RFC3339),
+			StartTime:      startStr,
+			CompletionTime: compStr,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -517,6 +547,102 @@ func getBuild(w http.ResponseWriter, r *http.Request, name string) {
 		Message:          build.Status.Message,
 		ArtifactURL:      build.Status.ArtifactURL,
 		ArtifactFileName: build.Status.ArtifactFileName,
+		StartTime: func() string {
+			if build.Status.StartTime != nil {
+				return build.Status.StartTime.Time.Format(time.RFC3339)
+			}
+			return ""
+		}(),
+		CompletionTime: func() string {
+			if build.Status.CompletionTime != nil {
+				return build.Status.CompletionTime.Time.Format(time.RFC3339)
+			}
+			return ""
+		}(),
+	})
+}
+
+// getBuildTemplate returns a BuildRequest-like struct representing the inputs that produced a given build
+func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromEnv()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	build := &automotivev1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: build.Spec.ManifestConfigMap, Namespace: namespace}, cm); err != nil {
+		http.Error(w, fmt.Sprintf("error fetching manifest config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Rehydrate advanced args
+	var aibExtra []string
+	var aibOverride []string
+	if v, ok := cm.Data["aib-extra-args.txt"]; ok {
+		fields := strings.Fields(strings.TrimSpace(v))
+		aibExtra = append(aibExtra, fields...)
+	}
+	if v, ok := cm.Data["aib-override-args.txt"]; ok {
+		fields := strings.Fields(strings.TrimSpace(v))
+		aibOverride = append(aibOverride, fields...)
+	}
+
+	manifestFileName := "manifest.aib.yml"
+	var manifest string
+	for k, v := range cm.Data {
+		if k == "custom-definitions.env" || k == "aib-extra-args.txt" || k == "aib-override-args.txt" {
+			continue
+		}
+		manifestFileName = k
+		manifest = v
+		break
+	}
+
+	var sourceFiles []string
+	for _, line := range strings.Split(manifest, "\n") {
+		s := strings.TrimSpace(line)
+		if strings.HasPrefix(s, "source:") || strings.HasPrefix(s, "source_path:") {
+			parts := strings.SplitN(s, ":", 2)
+			if len(parts) == 2 {
+				p := strings.TrimSpace(parts[1])
+				p = strings.Trim(p, "'\"")
+				if p != "" && !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "http") {
+					sourceFiles = append(sourceFiles, p)
+				}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, BuildTemplateResponse{
+		BuildRequest: BuildRequest{
+			Name:                   build.Name,
+			Manifest:               manifest,
+			ManifestFileName:       manifestFileName,
+			Distro:                 Distro(build.Spec.Distro),
+			Target:                 Target(build.Spec.Target),
+			Architecture:           Architecture(build.Spec.Architecture),
+			ExportFormat:           ExportFormat(build.Spec.ExportFormat),
+			Mode:                   Mode(build.Spec.Mode),
+			AutomotiveImageBuilder: build.Spec.AutomotiveImageBuilder,
+			CustomDefs:             nil,
+			AIBExtraArgs:           aibExtra,
+			AIBOverrideArgs:        aibOverride,
+			ServeArtifact:          build.Spec.ServeArtifact,
+		},
+		SourceFiles: sourceFiles,
 	})
 }
 
@@ -724,57 +850,148 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 	}
 
 	sourcePath := "/workspace/shared/" + artifactFileName
-	req := clientset.CoreV1().RESTClient().Post().
+
+	// First, determine if the artifact is a directory on the fileserver container
+	typeCheckReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(artifactPod.Name).
 		Namespace(namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "fileserver",
-			Command:   []string{"cat", sourcePath},
+			Command:   []string{"/bin/sh", "-c", "if [ -d '" + sourcePath + "' ]; then echo dir; else echo file; fi"},
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
+	typeExec, typeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, typeCheckReq.URL())
+	if typeErr != nil {
+		http.Error(w, fmt.Sprintf("executor (type check): %v", typeErr), http.StatusInternalServerError)
+		return
+	}
+	var typeStdout, typeStderr strings.Builder
+	if err := typeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &typeStdout, Stderr: &typeStderr}); err != nil {
+		http.Error(w, fmt.Sprintf("type check stream: %v", err), http.StatusInternalServerError)
+		return
+	}
+	isDir := strings.Contains(typeStdout.String(), "dir")
+	var servedAsPrecompressed bool
+	var archiveRoot string
+	if isDir {
+		checkGzReq := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(artifactPod.Name).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: "fileserver",
+				Command:   []string{"/bin/sh", "-c", "test -f '" + sourcePath + ".tar.gz' && echo yes || echo no"},
+				Stdout:    true,
+				Stderr:    true,
+			}, kscheme.ParameterCodec)
+		checkGzExec, gzErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkGzReq.URL())
+		if gzErr == nil {
+			var gzStdout, gzStderr strings.Builder
+			_ = checkGzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &gzStdout, Stderr: &gzStderr})
+			if strings.Contains(gzStdout.String(), "yes") {
+				isDir = false
+				servedAsPrecompressed = true
+				archiveRoot = artifactFileName
+				artifactFileName = artifactFileName + ".tar.gz"
+				sourcePath = sourcePath + ".tar.gz"
+			}
+		}
+	}
 
-	executor, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, req.URL())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("executor: %v", err), http.StatusInternalServerError)
+	if !isDir {
+		sizeReq := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(artifactPod.Name).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: "fileserver",
+				Command:   []string{"stat", "-c", "%s", sourcePath},
+				Stdout:    true,
+				Stderr:    true,
+			}, kscheme.ParameterCodec)
+		sizeExec, sizeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
+		var sizeStdout, sizeStderr strings.Builder
+		if sizeErr == nil {
+			_ = sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: &sizeStderr})
+		}
+
+		catReq := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(artifactPod.Name).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: "fileserver",
+				Command:   []string{"cat", sourcePath},
+				Stdout:    true,
+				Stderr:    true,
+			}, kscheme.ParameterCodec)
+		catExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, catReq.URL())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("executor: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if strings.HasSuffix(strings.ToLower(artifactFileName), ".tar.gz") {
+			w.Header().Set("Content-Type", "application/gzip")
+		} else {
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", artifactFileName))
+		if servedAsPrecompressed {
+			w.Header().Set("X-AIB-Artifact-Type", "directory")
+			w.Header().Set("X-AIB-Compression", "gzip")
+			w.Header().Set("X-AIB-Archive-Root", archiveRoot)
+		} else {
+			w.Header().Set("X-AIB-Artifact-Type", "file")
+			w.Header().Set("X-AIB-Compression", "none")
+		}
+		if sz := strings.TrimSpace(sizeStdout.String()); sz != "" {
+			w.Header().Set("Content-Length", sz)
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+
+		_ = catExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
 		return
 	}
 
-	sizeReq := clientset.CoreV1().RESTClient().Post().
+	// Directory artifact: always stream gzip-compressed tar archive of the directory.
+	tarFileName := artifactFileName + ".tar.gz"
+	tarCmd := []string{"/bin/sh", "-c", "cd /workspace/shared && tar -czf - '" + artifactFileName + "'"}
+
+	tarReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(artifactPod.Name).
 		Namespace(namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "fileserver",
-			Command:   []string{"stat", "-c", "%s", sourcePath},
+			Command:   tarCmd,
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
-	sizeExec, sizeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
-	var sizeStdout, sizeStderr strings.Builder
-	if sizeErr == nil {
-		_ = sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: &sizeStderr})
+	tarExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, tarReq.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (tar): %v", err), http.StatusInternalServerError)
+		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", artifactFileName))
-	if sz := strings.TrimSpace(sizeStdout.String()); sz != "" {
-		w.Header().Set("Content-Length", sz)
-	}
+
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", tarFileName))
+	w.Header().Set("X-AIB-Artifact-Type", "directory")
+	w.Header().Set("X-AIB-Compression", "gzip")
+	w.Header().Set("X-AIB-Archive-Root", artifactFileName)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: w,
-		Stderr: io.Discard,
-	})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("stream error: %v", err), http.StatusInternalServerError)
-		return
-	}
+	_ = tarExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
 }
 
 func copyFileToPod(config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {

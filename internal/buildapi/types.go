@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-// Bounded types for build parameters
-
 type Distro string
 
 func (d Distro) IsValid() bool {
@@ -90,6 +88,7 @@ type BuildRequest struct {
 	AutomotiveImageBuilder string       `json:"automotiveImageBuilder"`
 	CustomDefs             []string     `json:"customDefs"`
 	AIBExtraArgs           []string     `json:"aibExtraArgs"`
+	AIBOverrideArgs        []string     `json:"aibOverrideArgs"`
 	ServeArtifact          bool         `json:"serveArtifact"`
 }
 
@@ -100,18 +99,28 @@ type BuildResponse struct {
 	Message          string `json:"message"`
 	ArtifactURL      string `json:"artifactURL,omitempty"`
 	ArtifactFileName string `json:"artifactFileName,omitempty"`
+	StartTime        string `json:"startTime,omitempty"`
+	CompletionTime   string `json:"completionTime,omitempty"`
 }
 
 // BuildListItem represents a build in the list API
 type BuildListItem struct {
-	Name      string `json:"name"`
-	Phase     string `json:"phase"`
-	Message   string `json:"message"`
-	CreatedAt string `json:"createdAt"`
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	CreatedAt      string `json:"createdAt"`
+	StartTime      string `json:"startTime,omitempty"`
+	CompletionTime string `json:"completionTime,omitempty"`
 }
 
-// Avoid import cycle in server by providing aliases
 type (
 	BuildRequestAlias  = BuildRequest
 	BuildListItemAlias = BuildListItem
 )
+
+// BuildTemplateResponse includes the original inputs plus a hint of source files referenced by the manifest
+type BuildTemplateResponse struct {
+	BuildRequest `json:",inline"`
+	// SourceFiles are relative file paths referenced by the manifest that would need to be uploaded
+	SourceFiles []string `json:"sourceFiles,omitempty"`
+}
