@@ -127,7 +127,7 @@ kubectl delete -f install-$TAG.yaml
 Download the CLI binary from the same release and install it in your PATH (Linux):
 
 ```bash
-TAG=v0.0.10
+TAG=v0.0.11
 
 curl -L -o caib-$TAG-$ARCH \
   https://github.com/rh-sdv-cloud-incubator/automotive-dev-operator/releases/download/$TAG/caib-$TAG-$ARCH
