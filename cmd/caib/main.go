@@ -733,8 +733,6 @@ func loadTokenFromKubeconfig() (string, error) {
 			return t, nil
 		}
 	}
-	// Exec-based auth providers (e.g., OpenShift, OIDC with exec) may store the token after running the exec plugin.
-	// As an extra best-effort, try `oc whoami -t` when available.
 	if path, err := exec.LookPath("oc"); err == nil && path != "" {
 		out, err := exec.Command(path, "whoami", "-t").Output()
 		if err == nil {

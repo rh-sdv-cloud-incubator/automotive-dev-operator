@@ -1,0 +1,125 @@
+name: Release images and manifest
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  OPERATOR_IMAGE: quay.io/rh-sdv-cloud/automotive-dev-operator
+  WEBUI_IMAGE: quay.io/rh-sdv-cloud/aib-webui
+
+jobs:
+  build-and-push:
+    name: Build, push images, and publish manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive release tag
+        id: vars
+        run: echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Quay
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.OPERATOR_IMAGE }}:${{ steps.vars.outputs.TAG }}
+            ${{ env.OPERATOR_IMAGE }}:latest
+
+      - name: Build and push webui image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./webui
+          file: ./webui/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.WEBUI_IMAGE }}:${{ steps.vars.outputs.TAG }}
+            ${{ env.WEBUI_IMAGE }}:latest
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Install tools
+        run: |
+          go version
+          make --version
+
+      - name: Generate version-pinned installer manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.vars.outputs.TAG }}'
+
+          make kustomize
+
+          pushd config/manager >/dev/null
+          ../../bin/kustomize edit set image controller=${{ env.OPERATOR_IMAGE }}:${TAG}
+          popd >/dev/null
+
+          pushd config/build-api >/dev/null
+          ../../bin/kustomize edit set image controller=${{ env.OPERATOR_IMAGE }}:${TAG}
+          popd >/dev/null
+
+          pushd config/webui >/dev/null
+          ../../bin/kustomize edit set image quay.io/rh-sdv-cloud/aib-webui=${{ env.WEBUI_IMAGE }}:${TAG}
+          popd >/dev/null
+
+          mkdir -p dist
+          ./bin/kustomize build config/default > dist/install-${TAG}.yaml
+
+      - name: Build caib CLI (linux/amd64)
+        run: |
+          TAG='${{ steps.vars.outputs.TAG }}'
+          mkdir -p bin
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 make build-caib VERSION=${TAG}
+          cp bin/caib caib-${TAG}-amd64
+
+      - name: Build caib CLI (linux/arm64)
+        run: |
+          TAG='${{ steps.vars.outputs.TAG }}'
+          mkdir -p bin
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 make build-caib VERSION=${TAG}
+          cp bin/caib caib-${TAG}-arm64
+
+      - name: Upload manifest as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-manifest-${{ steps.vars.outputs.TAG }}
+          path: dist/install-${{ steps.vars.outputs.TAG }}.yaml
+
+      - name: Attach manifest to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/install-${{ steps.vars.outputs.TAG }}.yaml
+            caib-${{ steps.vars.outputs.TAG }}-amd64
+            caib-${{ steps.vars.outputs.TAG }}-arm64
+          tag_name: ${{ steps.vars.outputs.TAG }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+

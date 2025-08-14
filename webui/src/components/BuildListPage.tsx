@@ -161,7 +161,12 @@ const BuildListPage: React.FC = () => {
 
   const API_BASE = (window as any).__API_BASE || '';
   const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const resp = await fetch(input, { credentials: 'include', ...init });
+    const resp = await fetch(input, {
+      credentials: 'include',
+      cache: 'no-store',
+      keepalive: true,
+      ...init,
+    });
     if (resp.status === 401 || resp.status === 403) {
       const rd = encodeURIComponent(window.location.href);
       window.location.href = `${API_BASE}/oauth/start?rd=${rd}`;
@@ -244,7 +249,10 @@ const BuildListPage: React.FC = () => {
       const delayMs = 2000;
       let response: Response | null = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        response = await authFetch(`${API_BASE}/v1/builds/${buildName}/logs`, { signal: controller.signal });
+        response = await authFetch(`${API_BASE}/v1/builds/${buildName}/logs`, {
+          signal: controller.signal,
+          headers: { 'Accept': 'text/plain' },
+        });
         if (response.ok) break;
         if (response.status === 503 && attempt < maxAttempts) {
           await sleep(delayMs);
@@ -299,10 +307,12 @@ const BuildListPage: React.FC = () => {
       if (err?.name === 'AbortError' || String(err).includes('AbortError')) {
         return;
       }
-      setError(`Error fetching logs: ${err}`);
-      if (!isAutoRefresh) {
-        setLogs(`Error fetching logs: ${err}`);
-      }
+      // Transient network error: schedule a silent retry
+      setTimeout(() => {
+        if (selectedBuild) {
+          fetchLogs(selectedBuild, true);
+        }
+      }, 1500);
     } finally {
       setLoadingLogs(false);
       setIsStreaming(false);
@@ -425,7 +435,7 @@ const BuildListPage: React.FC = () => {
 
   useEffect(() => {
     fetchBuilds();
-    const interval = setInterval(fetchBuilds, 30000);
+    const interval = setInterval(fetchBuilds, 5000);
     return () => clearInterval(interval);
   }, []);
 

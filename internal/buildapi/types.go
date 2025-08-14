@@ -121,6 +121,5 @@ type (
 // BuildTemplateResponse includes the original inputs plus a hint of source files referenced by the manifest
 type BuildTemplateResponse struct {
 	BuildRequest `json:",inline"`
-	// SourceFiles are relative file paths referenced by the manifest that would need to be uploaded
-	SourceFiles []string `json:"sourceFiles,omitempty"`
+	SourceFiles  []string `json:"sourceFiles,omitempty"`
 }

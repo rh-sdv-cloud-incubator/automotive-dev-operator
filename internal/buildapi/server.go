@@ -889,8 +889,6 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	isDir := strings.Contains(typeStdout.String(), "dir")
-	var servedAsPrecompressed bool
-	var archiveRoot string
 	if isDir {
 		checkGzReq := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
@@ -909,8 +907,6 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 			_ = checkGzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &gzStdout, Stderr: &gzStderr})
 			if strings.Contains(gzStdout.String(), "yes") {
 				isDir = false
-				servedAsPrecompressed = true
-				archiveRoot = artifactFileName
 				artifactFileName = artifactFileName + ".tar.gz"
 				sourcePath = sourcePath + ".tar.gz"
 			}
@@ -918,62 +914,37 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 	}
 
 	if !isDir {
-		sizeReq := clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(artifactPod.Name).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "fileserver",
-				Command:   []string{"stat", "-c", "%s", sourcePath},
-				Stdout:    true,
-				Stderr:    true,
-			}, kscheme.ParameterCodec)
-		sizeExec, sizeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
-		var sizeStdout, sizeStderr strings.Builder
-		if sizeErr == nil {
-			_ = sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: &sizeStderr})
+		gzFileName := artifactFileName
+		if !strings.HasSuffix(strings.ToLower(gzFileName), ".gz") {
+			gzFileName = gzFileName + ".gz"
 		}
 
-		catReq := clientset.CoreV1().RESTClient().Post().
+		gzReq := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
 			Name(artifactPod.Name).
 			Namespace(namespace).
 			SubResource("exec").
 			VersionedParams(&corev1.PodExecOptions{
 				Container: "fileserver",
-				Command:   []string{"cat", sourcePath},
+				Command:   []string{"sh", "-c", "gzip -c \"" + sourcePath + "\""},
 				Stdout:    true,
 				Stderr:    true,
 			}, kscheme.ParameterCodec)
-		catExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, catReq.URL())
+		gzExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, gzReq.URL())
 		if err != nil {
-			http.Error(w, fmt.Sprintf("executor: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("executor (gzip): %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if strings.HasSuffix(strings.ToLower(artifactFileName), ".tar.gz") {
-			w.Header().Set("Content-Type", "application/gzip")
-		} else {
-			w.Header().Set("Content-Type", "application/octet-stream")
-		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", artifactFileName))
-		if servedAsPrecompressed {
-			w.Header().Set("X-AIB-Artifact-Type", "directory")
-			w.Header().Set("X-AIB-Compression", "gzip")
-			w.Header().Set("X-AIB-Archive-Root", archiveRoot)
-		} else {
-			w.Header().Set("X-AIB-Artifact-Type", "file")
-			w.Header().Set("X-AIB-Compression", "none")
-		}
-		if sz := strings.TrimSpace(sizeStdout.String()); sz != "" {
-			w.Header().Set("Content-Length", sz)
-		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
+		w.Header().Set("X-AIB-Artifact-Type", "file")
+		w.Header().Set("X-AIB-Compression", "gzip")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 
-		_ = catExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+		_ = gzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
 		return
 	}
 
@@ -1058,34 +1029,6 @@ func copyFileToPod(config *rest.Config, namespace, podName, containerName, local
 	return executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{Stdin: pr, Stdout: io.Discard, Stderr: io.Discard})
 }
 
-func getClientFromEnv() (client.Client, error) {
-	var cfg *rest.Config
-	var err error
-
-	cfg, err = rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build kube config: %w", err)
-		}
-	}
-
-	scheme := runtime.NewScheme()
-	if err := automotivev1.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("failed to add automotive scheme: %w", err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("failed to add core scheme: %w", err)
-	}
-
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create k8s client: %w", err)
-	}
-	return c, nil
-}
-
 func setOwnerRef(ctx context.Context, c client.Client, namespace, configMapName string, owner *automotivev1.ImageBuild) error {
 	cm := &corev1.ConfigMap{}
 	if err := c.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, cm); err != nil {
@@ -1119,11 +1062,7 @@ func resolveNamespace() string {
 	return "default"
 }
 
-func getRESTConfigFromRequest(r *http.Request) (*rest.Config, error) {
-	// Build a Kubernetes client config using the server's credentials (in-cluster SA
-	// or KUBECONFIG). We intentionally do NOT replace credentials with any
-	// end-user token from the request. End-user tokens are only used as the
-	// TokenReview payload, not for authenticating to the API server.
+func getRESTConfigFromRequest(_ *http.Request) (*rest.Config, error) {
 	var cfg *rest.Config
 	var err error
 	cfg, err = rest.InClusterConfig()
