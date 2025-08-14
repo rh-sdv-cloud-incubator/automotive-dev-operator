@@ -192,12 +192,31 @@ const CreateBuildPage: React.FC = () => {
   };
 
   const handleFileUpload = (file: File) => {
-    const uploadedFile: UploadedFile = {
-      id: `upload-${Date.now()}`,
-      name: file.name,
-      file: file,
-    };
-    setUploadedFiles((prev) => [...prev, uploadedFile]);
+    setUploadedFiles((prev) => {
+      const existingIndex = prev.findIndex(
+        (f) =>
+          f.name === file.name &&
+          f.file.size === file.size &&
+          f.file.lastModified === file.lastModified,
+      );
+
+      if (existingIndex !== -1) {
+        const updated = prev.slice();
+        updated[existingIndex] = {
+          id: updated[existingIndex].id,
+          name: file.name,
+          file,
+        };
+        return updated;
+      }
+
+      const uploadedFile: UploadedFile = {
+        id: `upload-${(crypto as any).randomUUID?.() || Date.now()}`,
+        name: file.name,
+        file,
+      };
+      return [...prev, uploadedFile];
+    });
   };
 
   const removeUploadedFile = (id: string) => {

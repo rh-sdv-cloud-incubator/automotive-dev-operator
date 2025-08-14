@@ -104,6 +104,7 @@ Download the pinned manifest from the release and apply it:
 TAG=v0.0.10
 curl -L -o install-$TAG.yaml https://github.com/rh-sdv-cloud-incubator/automotive-dev-operator/releases/download/$TAG/install-$TAG.yaml
 kubectl apply -f install-$TAG.yaml
+kubectl apply -f config/samples/automotive_v1_automotivedev.yaml # to add the image building tasks
 ```
 
 Verify rollout:
@@ -120,6 +121,30 @@ To upgrade, re-apply with a newer `TAG`. To uninstall, run:
 ```sh
 kubectl delete -f install-$TAG.yaml
 ```
+
+### CAIB CLI (download and setup)
+
+Download the CLI binary from the same release and install it in your PATH (Linux):
+
+```bash
+TAG=v0.0.10
+
+curl -L -o caib-$TAG-$ARCH \
+  https://github.com/rh-sdv-cloud-incubator/automotive-dev-operator/releases/download/$TAG/caib-$TAG-$ARCH
+
+sudo install -m 0755 caib-$TAG-$ARCH /usr/local/bin/caib
+
+# Verify
+caib --version
+```
+
+Point the CLI to your Build API once (or pass `--server` each time):
+
+```bash
+export CAIB_SERVER="https://build-api.YOUR_DOMAIN"
+```
+
+See `cmd/caib/README.md` for full usage examples.
 
 ## Project Distribution
 
