@@ -4,7 +4,8 @@ A simple controller that watches two CRs: `AutomotiveDev` which applies a pipeli
 
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+An in-progress operator that deploys tasks for automotive-image-builder cloud building.
+This includes a CLI tool and a webui
 
 ## Getting Started
 
@@ -68,6 +69,58 @@ make uninstall
 make undeploy
 ```
 
+## Releases and Deployments (Tagged Versions)
+
+This repository publishes versioned multi-arch images and a pinned installer manifest via GitHub Actions when you push a tag that starts with `v`.
+
+### Create a release
+
+1) Ensure CI variables and secrets are set in the repository:
+
+- REGISTRY (repository variable): container registry hostname (e.g. `quay.io`)
+- REPOSITORY (repository variable): org/namespace in the registry (e.g. `rh-sdv-cloud`)
+- REGISTRY_USER (secret): registry username
+- REGISTRY_PASSWORD (secret): registry password/token
+
+2) Tag and push:
+
+```sh
+git tag v0.0.10
+git push origin v0.0.10
+```
+
+On tag push, CI will:
+- Retag existing multi-arch images (built on `main`) to `v1.2.3` for both:
+  - `automotive-dev-operator`
+  - `aib-webui`
+- Build and attach `caib` CLI binaries for linux/amd64 and linux/arm64
+- Generate and attach a pinned manifest: `install-v1.2.3.yaml`
+
+### Deploy a specific version
+
+Download the pinned manifest from the release and apply it:
+
+```sh
+TAG=v0.0.10
+curl -L -o install-$TAG.yaml https://github.com/rh-sdv-cloud-incubator/automotive-dev-operator/releases/download/$TAG/install-$TAG.yaml
+kubectl apply -f install-$TAG.yaml
+```
+
+Verify rollout:
+
+```sh
+kubectl -n automotive-dev-operator-system get deploy -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[*].image
+kubectl -n automotive-dev-operator-system rollout status deploy/ado-controller-manager
+kubectl -n automotive-dev-operator-system rollout status deploy/ado-build-api
+kubectl -n automotive-dev-operator-system rollout status deploy/ado-webui
+```
+
+To upgrade, re-apply with a newer `TAG`. To uninstall, run:
+
+```sh
+kubectl delete -f install-$TAG.yaml
+```
+
 ## Project Distribution
 
 Following are the steps to build the installer and distribute this project to users.
@@ -90,6 +143,8 @@ Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/<org>/automotive-dev-operator/<tag or branch>/dist/install.yaml
 ```
+
+Note: Prefer the release asset `install-<tag>.yaml` described above, which pins all component images to the specific version.
 
 ## Contributing
 // TODO(user): Add detailed information on how you would like others to contribute to this project

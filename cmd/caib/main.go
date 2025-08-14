@@ -80,7 +80,7 @@ func main() {
 	buildCmd.Flags().StringVar(&imageBuildCfg, "config", "", "path to ImageBuild YAML configuration file")
 	buildCmd.Flags().StringVar(&manifest, "manifest", "", "path to manifest YAML file for the build")
 	buildCmd.Flags().StringVar(&buildName, "name", "", "name for the ImageBuild")
-	buildCmd.Flags().StringVar(&distro, "distro", "cs9", "distribution to build")
+	buildCmd.Flags().StringVar(&distro, "distro", "autosd", "distribution to build")
 	buildCmd.Flags().StringVar(&target, "target", "qemu", "target platform (qemu, etc)")
 	buildCmd.Flags().StringVar(&architecture, "arch", "arm64", "architecture (amd64, arm64)")
 	buildCmd.Flags().StringVar(&exportFormat, "export-format", "image", "export format (image, qcow2, etc)")
@@ -733,6 +733,8 @@ func loadTokenFromKubeconfig() (string, error) {
 			return t, nil
 		}
 	}
+	// Exec-based auth providers (e.g., OpenShift, OIDC with exec) may store the token after running the exec plugin.
+	// As an extra best-effort, try `oc whoami -t` when available.
 	if path, err := exec.LookPath("oc"); err == nil && path != "" {
 		out, err := exec.Command(path, "whoami", "-t").Output()
 		if err == nil {
