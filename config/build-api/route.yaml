@@ -11,8 +11,7 @@ spec:
     kind: Service
     name: build-api
   port:
-    targetPort: proxy
+    targetPort: http
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
-

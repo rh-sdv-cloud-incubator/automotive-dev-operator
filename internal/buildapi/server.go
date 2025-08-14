@@ -1120,18 +1120,10 @@ func resolveNamespace() string {
 }
 
 func getRESTConfigFromRequest(r *http.Request) (*rest.Config, error) {
-	// Try to get the bearer token from the Authorization header
-	authHeader := r.Header.Get("Authorization")
-	bearerToken := ""
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		bearerToken = strings.TrimPrefix(authHeader, "Bearer ")
-	}
-	// Also check for X-Forwarded-Access-Token header from OAuth proxy
-	if bearerToken == "" {
-		bearerToken = r.Header.Get("X-Forwarded-Access-Token")
-	}
-
-	// Start with the base config
+	// Build a Kubernetes client config using the server's credentials (in-cluster SA
+	// or KUBECONFIG). We intentionally do NOT replace credentials with any
+	// end-user token from the request. End-user tokens are only used as the
+	// TokenReview payload, not for authenticating to the API server.
 	var cfg *rest.Config
 	var err error
 	cfg, err = rest.InClusterConfig()
@@ -1142,17 +1134,6 @@ func getRESTConfigFromRequest(r *http.Request) (*rest.Config, error) {
 			return nil, fmt.Errorf("failed to build kube config: %w", err)
 		}
 	}
-
-	// If we have a bearer token from the request, use it
-	if bearerToken != "" {
-		cfgCopy := rest.CopyConfig(cfg)
-		cfgCopy.BearerToken = bearerToken
-		cfgCopy.BearerTokenFile = "" // Clear any token file to use the explicit token
-		cfgCopy.Timeout = 10 * time.Minute
-		return cfgCopy, nil
-	}
-
-	// Otherwise use the default config
 	cfgCopy := rest.CopyConfig(cfg)
 	cfgCopy.Timeout = 10 * time.Minute
 	return cfgCopy, nil
@@ -1180,7 +1161,7 @@ func getClientFromRequest(r *http.Request) (client.Client, error) {
 }
 
 func isAuthenticated(r *http.Request) bool {
-	// Extract bearer token
+	// Extract bearer token presented by the client (direct or via OAuth proxy)
 	authHeader := r.Header.Get("Authorization")
 	token := ""
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -1193,7 +1174,7 @@ func isAuthenticated(r *http.Request) bool {
 		return false
 	}
 
-	// Validate token cryptographically via TokenReview; no per-user RBAC check
+	// Validate token via TokenReview using server credentials
 	cfg, err := getRESTConfigFromRequest(r)
 	if err != nil {
 		return false
@@ -1203,8 +1184,9 @@ func isAuthenticated(r *http.Request) bool {
 		return false
 	}
 	tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
-	if _, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{}); err != nil {
+	res, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{})
+	if err != nil {
 		return false
 	}
-	return true
+	return res.Status.Authenticated
 }

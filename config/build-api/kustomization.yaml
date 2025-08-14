@@ -14,5 +14,5 @@ images:
 secretGenerator:
 - name: build-api-oauth-proxy
   literals:
-  - cookie-secret=YWFhYWFhYWFhYWFhYWFhYQ==
+  - cookie-secret=j370XdGMiTE0d5q04UwNgrGYDQYcj4VJHtF7O1CUIrc=
 

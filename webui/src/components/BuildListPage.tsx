@@ -159,11 +159,22 @@ const BuildListPage: React.FC = () => {
     }
   };
 
+  const API_BASE = (window as any).__API_BASE || '';
+  const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const resp = await fetch(input, { credentials: 'include', ...init });
+    if (resp.status === 401 || resp.status === 403) {
+      const rd = encodeURIComponent(window.location.href);
+      window.location.href = `${API_BASE}/oauth/start?rd=${rd}`;
+      throw new Error('Redirecting to login');
+    }
+    return resp;
+  };
+
   const fetchBuilds = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('/v1/builds');
+      const response = await authFetch(`${API_BASE}/v1/builds`);
       if (response.ok) {
         const data = await response.json();
         let list: any[] = Array.isArray(data) ? data : [];
@@ -174,7 +185,7 @@ const BuildListPage: React.FC = () => {
             const phase = (b.phase || '').toLowerCase();
             if (!hasTimes && (phase === 'completed' || phase === 'failed')) {
               try {
-                const r = await fetch(`/v1/builds/${encodeURIComponent(b.name)}`);
+                const r = await authFetch(`${API_BASE}/v1/builds/${encodeURIComponent(b.name)}`);
                 if (r.ok) {
                   const d = await r.json();
                   return { ...b, startTime: d.startTime || b.startTime, completionTime: d.completionTime || b.completionTime };
@@ -198,7 +209,7 @@ const BuildListPage: React.FC = () => {
   const fetchBuildDetails = async (buildName: string): Promise<BuildDetails | null> => {
     try {
       setLoadingDetails(true);
-      const response = await fetch(`/v1/builds/${buildName}`);
+      const response = await authFetch(`${API_BASE}/v1/builds/${buildName}`);
       if (response.ok) {
         const data = await response.json();
         setBuildDetails(data);
@@ -233,7 +244,7 @@ const BuildListPage: React.FC = () => {
       const delayMs = 2000;
       let response: Response | null = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        response = await fetch(`/v1/builds/${buildName}/logs`, { signal: controller.signal });
+        response = await authFetch(`${API_BASE}/v1/builds/${buildName}/logs`, { signal: controller.signal });
         if (response.ok) break;
         if (response.status === 503 && attempt < maxAttempts) {
           await sleep(delayMs);
@@ -303,7 +314,7 @@ const BuildListPage: React.FC = () => {
 
   const fetchBuildParams = async (buildName: string) => {
     try {
-      const resp = await fetch(`/v1/builds/${buildName}/template`);
+      const resp = await authFetch(`${API_BASE}/v1/builds/${buildName}/template`);
       if (!resp.ok) return;
       const tpl = await resp.json();
       setBuildParams({
@@ -323,7 +334,7 @@ const BuildListPage: React.FC = () => {
 
   const downloadArtifact = (buildName: string) => {
     try {
-      const url = `/v1/builds/${buildName}/artifact`;
+      const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
       window.location.href = url;
     } catch (err) {
       setError(`Error initiating download: ${err}`);

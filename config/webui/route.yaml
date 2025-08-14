@@ -1,16 +1,16 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: automotive-dev-webui
+  name: webui
   namespace: automotive-dev-operator-system
   labels:
-    app.kubernetes.io/name: automotive-dev-webui
+    app.kubernetes.io/name: webui
     app.kubernetes.io/part-of: automotive-dev-operator
     app.kubernetes.io/component: webui
 spec:
   to:
     kind: Service
-    name: automotive-dev-webui
+    name: webui
     weight: 100
   port:
     targetPort: http

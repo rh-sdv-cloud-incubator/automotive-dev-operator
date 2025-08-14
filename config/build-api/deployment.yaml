@@ -18,7 +18,7 @@ spec:
         app.kubernetes.io/name: automotive-dev-operator
         app.kubernetes.io/component: build-api
     spec:
-      serviceAccountName: controller-manager
+      serviceAccountName: ado-controller-manager
       containers:
       - name: build-api
         image: quay.io/rh-sdv-cloud/automotive-dev-operator:latest
@@ -46,15 +46,16 @@ spec:
         imagePullPolicy: IfNotPresent
         args:
         - --provider=openshift
-        - --http-address=:8081
         - --https-address=
-        - --upstream=http://127.0.0.1:8080
-        - --openshift-service-account=controller-manager
+        - --http-address=:8081
+        - --upstream=http://localhost:8080
+        - --openshift-service-account=ado-controller-manager
         - --cookie-secret=$(COOKIE_SECRET)
-        - --pass-user-bearer-token=true
+        - --cookie-secure=false
         - --pass-access-token=true
+        - --pass-user-headers=true
         - --request-logging=true
-        - --skip-auth-regex=^/v1/healthz$
+        - --skip-auth-regex=^/healthz
         - --email-domain=*
         - --skip-provider-button=true
         env:
