@@ -50,6 +50,11 @@ type BuildConfig struct {
 	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
 	// +optional
 	RuntimeClassName string `json:"runtimeClassName,omitempty"`
+
+	// ServeExpiryHours specifies how long to serve build artifacts before automatic cleanup
+	// Default: 24
+	// +optional
+	ServeExpiryHours int32 `json:"serveExpiryHours,omitempty"`
 }
 
 // AutomotiveDevStatus defines the observed state of AutomotiveDev
