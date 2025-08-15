@@ -417,10 +417,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace := resolveNamespace()
 
-	requestedBy := strings.TrimSpace(r.Header.Get("X-Forwarded-User"))
-	if requestedBy == "" {
-		requestedBy = "unknown"
-	}
+	requestedBy := resolveRequester(r)
 
 	existing := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
@@ -1139,4 +1136,41 @@ func isAuthenticated(r *http.Request) bool {
 		return false
 	}
 	return res.Status.Authenticated
+}
+
+// resolveRequester derives the requester identity from a validated token review.
+// It prefers the username returned by the Kubernetes TokenReview, and only falls
+// back to proxy headers if strictly necessary.
+func resolveRequester(r *http.Request) string {
+	// Extract bearer token presented by the client (direct or via OAuth proxy)
+	authHeader := r.Header.Get("Authorization")
+	token := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	if token == "" {
+		token = r.Header.Get("X-Forwarded-Access-Token")
+	}
+
+	// Attempt TokenReview to obtain canonical username
+	if strings.TrimSpace(token) != "" {
+		cfg, err := getRESTConfigFromRequest(r)
+		if err == nil {
+			clientset, err := kubernetes.NewForConfig(cfg)
+			if err == nil {
+				tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
+				if res, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{}); err == nil {
+					if res.Status.Authenticated && res.Status.User.Username != "" {
+						return res.Status.User.Username
+					}
+				}
+			}
+		}
+	}
+
+	// Last resort: consult proxy-provided header (not trusted, used only as fallback)
+	if u := strings.TrimSpace(r.Header.Get("X-Forwarded-User")); u != "" {
+		return u
+	}
+	return "unknown"
 }
