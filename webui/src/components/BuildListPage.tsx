@@ -33,6 +33,7 @@ interface BuildItem {
   name: string;
   phase: string;
   message: string;
+  requestedBy?: string;
   createdAt: string;
   startTime?: string;
   completionTime?: string;
@@ -42,6 +43,7 @@ interface BuildDetails {
   name: string;
   phase: string;
   message: string;
+  requestedBy?: string;
   artifactURL?: string;
   artifactFileName?: string;
   startTime?: string;
@@ -500,6 +502,7 @@ const BuildListPage: React.FC = () => {
               <Thead>
                 <Tr>
                   <Th>Name</Th>
+                  <Th>Requested By</Th>
                   <Th>Status</Th>
                   <Th>Message</Th>
                   <Th>Created</Th>
@@ -511,6 +514,7 @@ const BuildListPage: React.FC = () => {
                 {builds.map((build) => (
                   <Tr key={build.name}>
                     <Td>{build.name}</Td>
+                    <Td>{build.requestedBy || '-'}</Td>
                     <Td>
                       <Badge color={getPhaseVariant(build.phase)}>
                         {build.phase}
@@ -581,6 +585,8 @@ const BuildListPage: React.FC = () => {
                   <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px' }}>
                     <dt><strong>Name:</strong></dt>
                     <dd>{buildDetails.name}</dd>
+                    <dt><strong>Requested By:</strong></dt>
+                    <dd>{buildDetails.requestedBy || '-'}</dd>
                     <dt><strong>Status:</strong></dt>
                     <dd>
                       <Badge color={getPhaseVariant(buildDetails.phase)}>
