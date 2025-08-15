@@ -160,6 +160,8 @@ func (r *ImageBuildReconciler) handleCompletedState(ctx context.Context, imageBu
 		return ctrl.Result{}, nil
 	}
 
+	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
+
 	expiryHours := int32(24)
 	if imageBuild.Spec.ServeExpiryHours > 0 {
 		expiryHours = imageBuild.Spec.ServeExpiryHours
@@ -177,22 +179,38 @@ func (r *ImageBuildReconciler) handleCompletedState(ctx context.Context, imageBu
 
 	svcName := fmt.Sprintf("%s-artifact-service", imageBuild.Name)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: imageBuild.Namespace}}
-	_ = r.Delete(ctx, svc)
+	if err := r.Delete(ctx, svc); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Service", "service", svcName)
+	}
 
 	routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
 	route := &routev1.Route{ObjectMeta: metav1.ObjectMeta{Name: routeName, Namespace: imageBuild.Namespace}}
-	_ = r.Delete(ctx, route)
+	if err := r.Delete(ctx, route); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Route", "route", routeName)
+	}
 
 	podName := fmt.Sprintf("%s-artifact-pod", imageBuild.Name)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: imageBuild.Namespace}}
-	_ = r.Delete(ctx, pod)
+	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Pod", "pod", podName)
+	}
+
+	cmName := fmt.Sprintf("%s-nginx-config", imageBuild.Name)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: imageBuild.Namespace}}
+	if err := r.Delete(ctx, cm); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete nginx ConfigMap", "configMap", cmName)
+	}
 
 	fresh := &automotivev1.ImageBuild{}
 	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err == nil {
 		patch := client.MergeFrom(fresh.DeepCopy())
 		fresh.Status.ArtifactURL = ""
+		fresh.Status.ArtifactFileName = ""
+		fresh.Status.ArtifactPath = ""
 		fresh.Status.Message = "Artifact serving expired and resources cleaned up"
-		_ = r.Status().Patch(ctx, fresh, patch)
+		if err := r.Status().Patch(ctx, fresh, patch); err != nil {
+			log.Error(err, "failed to update ImageBuild status after expiry cleanup")
+		}
 	}
 
 	return ctrl.Result{}, nil
