@@ -243,6 +243,9 @@ components:
           type: string
         message:
           type: string
+        requestedBy:
+          type: string
+          nullable: true
         artifactURL:
           type: string
           nullable: true
@@ -254,6 +257,9 @@ components:
       properties:
         name:
           type: string
+        requestedBy:
+          type: string
+          nullable: true
     BuildTemplateResponse:
       allOf:
         - $ref: '#/components/schemas/BuildRequest'

@@ -417,6 +417,11 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	namespace := resolveNamespace()
 
+	requestedBy := strings.TrimSpace(r.Header.Get("X-Forwarded-User"))
+	if requestedBy == "" {
+		requestedBy = "unknown"
+	}
+
 	existing := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
 		http.Error(w, fmt.Sprintf("ImageBuild %s already exists", req.Name), http.StatusConflict)
@@ -470,6 +475,9 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			Name:      req.Name,
 			Namespace: namespace,
 			Labels:    labels,
+			Annotations: map[string]string{
+				"automotive.sdv.cloud.redhat.com/requested-by": requestedBy,
+			},
 		},
 		Spec: automotivev1.ImageBuildSpec{
 			Distro:                 string(req.Distro),
@@ -494,9 +502,10 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, BuildResponse{
-		Name:    req.Name,
-		Phase:   "Building",
-		Message: "Build triggered",
+		Name:        req.Name,
+		Phase:       "Building",
+		Message:     "Build triggered",
+		RequestedBy: requestedBy,
 	})
 }
 
@@ -529,6 +538,7 @@ func listBuilds(w http.ResponseWriter, r *http.Request) {
 			Name:           b.Name,
 			Phase:          b.Status.Phase,
 			Message:        b.Status.Message,
+			RequestedBy:    b.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
 			CreatedAt:      b.CreationTimestamp.Time.Format(time.RFC3339),
 			StartTime:      startStr,
 			CompletionTime: compStr,
@@ -560,6 +570,7 @@ func getBuild(w http.ResponseWriter, r *http.Request, name string) {
 		Name:             build.Name,
 		Phase:            build.Status.Phase,
 		Message:          build.Status.Message,
+		RequestedBy:      build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
 		ArtifactURL:      build.Status.ArtifactURL,
 		ArtifactFileName: build.Status.ArtifactFileName,
 		StartTime: func() string {

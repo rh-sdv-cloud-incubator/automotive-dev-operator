@@ -97,6 +97,7 @@ type BuildResponse struct {
 	Name             string `json:"name"`
 	Phase            string `json:"phase"`
 	Message          string `json:"message"`
+	RequestedBy      string `json:"requestedBy,omitempty"`
 	ArtifactURL      string `json:"artifactURL,omitempty"`
 	ArtifactFileName string `json:"artifactFileName,omitempty"`
 	StartTime        string `json:"startTime,omitempty"`
@@ -108,6 +109,7 @@ type BuildListItem struct {
 	Name           string `json:"name"`
 	Phase          string `json:"phase"`
 	Message        string `json:"message"`
+	RequestedBy    string `json:"requestedBy,omitempty"`
 	CreatedAt      string `json:"createdAt"`
 	StartTime      string `json:"startTime,omitempty"`
 	CompletionTime string `json:"completionTime,omitempty"`
