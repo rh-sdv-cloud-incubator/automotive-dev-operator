@@ -66,7 +66,9 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.handleUploadingState(ctx, imageBuild)
 	case "Building":
 		return r.handleBuildingState(ctx, imageBuild)
-	case "Completed", "Failed":
+	case "Completed":
+		return r.handleCompletedState(ctx, imageBuild)
+	case "Failed":
 		return ctrl.Result{}, nil
 	default:
 		log.Info("Unknown phase", "phase", imageBuild.Status.Phase)
@@ -85,7 +87,7 @@ func (r *ImageBuildReconciler) handleInitialState(ctx context.Context, imageBuil
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if err := r.updateStatus(ctx, imageBuild, "Building", "Starting build process"); err != nil {
+	if err := r.updateStatus(ctx, imageBuild, "Building", "Build started"); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -103,7 +105,7 @@ func (r *ImageBuildReconciler) handleUploadingState(ctx context.Context, imageBu
 		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("failed to shutdown upload server: %w", err)
 	}
 
-	if err := r.updateStatus(ctx, imageBuild, "Building", "Starting build process"); err != nil {
+	if err := r.updateStatus(ctx, imageBuild, "Building", "Build started"); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -151,6 +153,67 @@ func (r *ImageBuildReconciler) handleBuildingState(ctx context.Context, imageBui
 	}
 
 	return r.startNewBuild(ctx, imageBuild)
+}
+
+func (r *ImageBuildReconciler) handleCompletedState(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {
+	if !imageBuild.Spec.ServeArtifact {
+		return ctrl.Result{}, nil
+	}
+
+	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
+
+	expiryHours := int32(24)
+	if imageBuild.Spec.ServeExpiryHours > 0 {
+		expiryHours = imageBuild.Spec.ServeExpiryHours
+	}
+
+	if imageBuild.Status.CompletionTime == nil {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	expiryAt := imageBuild.Status.CompletionTime.Time.Add(time.Duration(expiryHours) * time.Hour)
+	now := time.Now()
+	if now.Before(expiryAt) {
+		return ctrl.Result{RequeueAfter: time.Until(expiryAt)}, nil
+	}
+
+	svcName := fmt.Sprintf("%s-artifact-service", imageBuild.Name)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: imageBuild.Namespace}}
+	if err := r.Delete(ctx, svc); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Service", "service", svcName)
+	}
+
+	routeName := fmt.Sprintf("%s-artifacts", imageBuild.Name)
+	route := &routev1.Route{ObjectMeta: metav1.ObjectMeta{Name: routeName, Namespace: imageBuild.Namespace}}
+	if err := r.Delete(ctx, route); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Route", "route", routeName)
+	}
+
+	podName := fmt.Sprintf("%s-artifact-pod", imageBuild.Name)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: imageBuild.Namespace}}
+	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete artifact Pod", "pod", podName)
+	}
+
+	cmName := fmt.Sprintf("%s-nginx-config", imageBuild.Name)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: imageBuild.Namespace}}
+	if err := r.Delete(ctx, cm); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "failed to delete nginx ConfigMap", "configMap", cmName)
+	}
+
+	fresh := &automotivev1.ImageBuild{}
+	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err == nil {
+		patch := client.MergeFrom(fresh.DeepCopy())
+		fresh.Status.ArtifactURL = ""
+		fresh.Status.ArtifactFileName = ""
+		fresh.Status.ArtifactPath = ""
+		fresh.Status.Message = "Artifact serving expired and resources cleaned up"
+		if err := r.Status().Patch(ctx, fresh, patch); err != nil {
+			log.Error(err, "failed to update ImageBuild status after expiry cleanup")
+		}
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuild *automotivev1.ImageBuild) (ctrl.Result, error) {

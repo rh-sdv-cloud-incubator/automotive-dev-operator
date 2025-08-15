@@ -465,6 +465,17 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		"automotive.sdv.cloud.redhat.com/target":       string(req.Target),
 		"automotive.sdv.cloud.redhat.com/architecture": string(req.Architecture),
 	}
+
+	serveExpiryHours := int32(24)
+	{
+		autoDev := &automotivev1.AutomotiveDev{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "automotive-dev", Namespace: namespace}, autoDev); err == nil {
+			if autoDev.Spec.BuildConfig != nil && autoDev.Spec.BuildConfig.ServeExpiryHours > 0 {
+				serveExpiryHours = autoDev.Spec.BuildConfig.ServeExpiryHours
+			}
+		}
+	}
+
 	imageBuild := &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      req.Name,
@@ -479,7 +490,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			Mode:                   string(req.Mode),
 			AutomotiveImageBuilder: req.AutomotiveImageBuilder,
 			ServeArtifact:          req.ServeArtifact,
-			ServeExpiryHours:       24,
+			ServeExpiryHours:       serveExpiryHours,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       needsUpload,
 		},
