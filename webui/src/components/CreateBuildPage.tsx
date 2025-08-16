@@ -541,60 +541,55 @@ const CreateBuildPage: React.FC = () => {
                               />
                             </FormGroup>
                           </GridItem>
+                          
+                          <GridItem span={12}>
+                            <ExpandableSection
+                              toggleText="Advanced Build Options"
+                              isExpanded={isAdvancedOpen}
+                              onToggle={(_event, expanded) =>
+                                setIsAdvancedOpen(expanded as boolean)
+                              }
+                            >
+                              <div style={{ padding: "16px 0" }}>
+                                <Grid hasGutter>
+                                  <GridItem span={6}>
+                                    <FormGroup
+                                      label={<PopoverLabel label="AIB Extra Arguments" popoverContent="Additional arguments for automotive-image-builder (e.g., --fusa, --define)" />}
+                                      fieldId="aibExtraArgs"
+                                    >
+                                      <TextInput
+                                        id="aibExtraArgs"
+                                        value={formData.aibExtraArgs}
+                                        onChange={(_event, value) =>
+                                          handleInputChange("aibExtraArgs", value)
+                                        }
+                                        placeholder="--verbose --debug"
+                                      />
+                                    </FormGroup>
+                                  </GridItem>
+
+                                  <GridItem span={6}>
+                                    <FormGroup
+                                      label={<PopoverLabel label="AIB Override Arguments" popoverContent="arguments to be passed as-is to automotive-image-builder" />}
+                                      fieldId="aibOverrideArgs"
+                                    >
+                                      <TextInput
+                                        id="aibOverrideArgs"
+                                        value={formData.aibOverrideArgs}
+                                        onChange={(_event, value) =>
+                                          handleInputChange("aibOverrideArgs", value)
+                                        }
+                                        placeholder="Complete override of AIB arguments"
+                                      />
+                                    </FormGroup>
+                                  </GridItem>
+                                </Grid>
+                              </div>
+                            </ExpandableSection>
+                          </GridItem>
                         </Grid>
                       </StackItem>
                     </Stack>
-                  </CardBody>
-                </Card>
-              </StackItem>
-
-              {/* Advanced Options */}
-              <StackItem>
-                <Card>
-                  <CardBody>
-                    <ExpandableSection
-                      toggleText="Advanced Options"
-                      isExpanded={isAdvancedOpen}
-                      onToggle={(_event, expanded) =>
-                        setIsAdvancedOpen(expanded as boolean)
-                      }
-                    >
-                      <div style={{ padding: "16px 0" }}>
-                        <Grid hasGutter>
-                          <GridItem span={6}>
-                            <FormGroup
-                              label={<PopoverLabel label="AIB Extra Arguments" popoverContent="Additional arguments for automotive-image-builder (e.g., --fusa, --define)" />}
-                              fieldId="aibExtraArgs"
-                            >
-                              <TextInput
-                                id="aibExtraArgs"
-                                value={formData.aibExtraArgs}
-                                onChange={(_event, value) =>
-                                  handleInputChange("aibExtraArgs", value)
-                                }
-                                placeholder="--verbose --debug"
-                              />
-                            </FormGroup>
-                          </GridItem>
-
-                          <GridItem span={6}>
-                            <FormGroup
-                              label={<PopoverLabel label="AIB Override Arguments" popoverContent="arguments to be passed as-is to automotive-image-builder" />}
-                              fieldId="aibOverrideArgs"
-                            >
-                              <TextInput
-                                id="aibOverrideArgs"
-                                value={formData.aibOverrideArgs}
-                                onChange={(_event, value) =>
-                                  handleInputChange("aibOverrideArgs", value)
-                                }
-                                placeholder="Complete override of AIB arguments"
-                              />
-                            </FormGroup>
-                          </GridItem>
-                        </Grid>
-                      </div>
-                    </ExpandableSection>
                   </CardBody>
                 </Card>
               </StackItem>
@@ -639,35 +634,22 @@ const CreateBuildPage: React.FC = () => {
                       </StackItem>
                       {expectedFiles.length > 0 && (
                         <StackItem>
-                          <div
-                            style={{
-                              backgroundColor: "var(--pf-v5-global--info-color--100)",
-                              color: "var(--pf-v5-global--info-color--200)",
-                              padding: "12px 16px",
-                              borderRadius: "4px",
-                              border: "1px solid var(--pf-v5-global--info-color--100)",
-                              fontSize: "0.875rem"
-                            }}
+                          <Alert
+                            variant="info"
+                            title="Template expects these files"
+                            isInline
                           >
-                            <strong>Template expects these files:</strong>
                             <ul style={{ margin: "8px 0 0 0", paddingLeft: "20px" }}>
                               {expectedFiles.map((filename, index) => (
                                 <li key={index} style={{ margin: "4px 0" }}>
-                                  <code style={{
-                                    backgroundColor: "var(--pf-v5-global--BackgroundColor--200)",
-                                    padding: "2px 6px",
-                                    borderRadius: "3px",
-                                    fontSize: "0.8rem"
-                                  }}>
-                                    {filename}
-                                  </code>
+                                  <code>{filename}</code>
                                 </li>
                               ))}
                             </ul>
-                            <p style={{ margin: "8px 0 0 0", fontSize: "0.8rem" }}>
+                            <p style={{ margin: "8px 0 0 0" }}>
                               Please upload or create these files to match the template configuration.
                             </p>
-                          </div>
+                          </Alert>
                         </StackItem>
                       )}
                       <StackItem>
@@ -854,13 +836,22 @@ const CreateBuildPage: React.FC = () => {
                         </Button>
                       </SplitItem>
                       <SplitItem isFilled />
-                      <SplitItem>
-                        <small style={{ color: "var(--pf-v5-global--Color--200)" }}>
-                          {!formData.name && "Build name required"}
-                          {!formData.manifest && formData.name && "Manifest content required"}
-                          {!formData.architecture && formData.name && formData.manifest && "Architecture required"}
-                        </small>
-                      </SplitItem>
+                      {(!formData.name || (!formData.manifest && formData.name) || (!formData.architecture && formData.name && formData.manifest)) && (
+                        <SplitItem>
+                          <Alert
+                            variant="warning"
+                            title={
+                              !formData.name 
+                                ? "Build name required"
+                                : !formData.manifest && formData.name
+                                  ? "Manifest content required" 
+                                  : "Architecture required"
+                            }
+                            isInline
+                            isPlain
+                          />
+                        </SplitItem>
+                      )}
                     </Split>
                   </CardBody>
                 </Card>
