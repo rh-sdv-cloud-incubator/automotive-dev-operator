@@ -938,36 +938,61 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 			gzFileName = gzFileName + ".gz"
 		}
 
-		gzReq := clientset.CoreV1().RESTClient().Post().
+		gzPath := sourcePath + ".gz"
+
+		sizeReq := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
 			Name(artifactPod.Name).
 			Namespace(namespace).
 			SubResource("exec").
 			VersionedParams(&corev1.PodExecOptions{
 				Container: "fileserver",
-				Command:   []string{"sh", "-c", "gzip -c \"" + sourcePath + "\""},
+				Command:   []string{"sh", "-c", "wc -c < \"" + gzPath + "\""},
 				Stdout:    true,
 				Stderr:    true,
 			}, kscheme.ParameterCodec)
-		gzExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, gzReq.URL())
+		sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
 		if err != nil {
-			http.Error(w, fmt.Sprintf("executor (gzip): %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("executor (size check): %v", err), http.StatusInternalServerError)
+			return
+		}
+		var sizeStdout strings.Builder
+		if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
+			http.Error(w, fmt.Sprintf("size check stream: %v", err), http.StatusInternalServerError)
+			return
+		}
+		compressedSize := strings.TrimSpace(sizeStdout.String())
+
+		streamReq := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(artifactPod.Name).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: "fileserver",
+				Command:   []string{"cat", gzPath},
+				Stdout:    true,
+				Stderr:    true,
+			}, kscheme.ParameterCodec)
+		streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
+		w.Header().Set("Content-Length", compressedSize)
 		w.Header().Set("X-AIB-Artifact-Type", "file")
 		w.Header().Set("X-AIB-Compression", "gzip")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 
-		_ = gzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+		_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
 		return
 	}
 
-	// Directory artifact: always stream gzip-compressed tar archive of the directory.
 	tarFileName := artifactFileName + ".tar.gz"
 	tarCmd := []string{"/bin/sh", "-c", "cd /workspace/shared && tar -czf - '" + artifactFileName + "'"}
 
@@ -1122,9 +1147,7 @@ func isAuthenticated(r *http.Request) bool {
 	// Extract bearer token presented by the client (direct or via OAuth proxy)
 	authHeader := r.Header.Get("Authorization")
 	token := ""
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	token, _ = strings.CutPrefix(authHeader, "Bearer ")
 	if token == "" {
 		token = r.Header.Get("X-Forwarded-Access-Token")
 	}
@@ -1156,9 +1179,7 @@ func resolveRequester(r *http.Request) string {
 	// Extract bearer token presented by the client (direct or via OAuth proxy)
 	authHeader := r.Header.Get("Authorization")
 	token := ""
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	token, _ = strings.CutPrefix(authHeader, "Bearer ")
 	if token == "" {
 		token = r.Header.Get("X-Forwarded-Access-Token")
 	}
