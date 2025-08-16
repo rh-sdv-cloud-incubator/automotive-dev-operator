@@ -18,10 +18,6 @@ import {
   ExpandableSection,
   List,
   ListItem,
-  Tab,
-  Tabs,
-  TabTitleText,
-  Switch,
 } from "@patternfly/react-core";
 import { PlusCircleIcon, TrashIcon, UploadIcon } from "@patternfly/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -95,7 +91,6 @@ const CreateBuildPage: React.FC = () => {
   } | null>(null);
   const [textFiles, setTextFiles] = useState<TextFile[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [activeFileTab, setActiveFileTab] = useState<string | number>(0);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
   const initializedFromTemplate = useRef(false);
@@ -559,16 +554,10 @@ const CreateBuildPage: React.FC = () => {
               Files
             </Title>
 
-            <ExpandableSection toggleText="External Files" isExpanded>
-              <Tabs
-                activeKey={activeFileTab}
-                onSelect={(_event, tabIndex) => setActiveFileTab(tabIndex)}
-              >
-                <Tab
-                  eventKey={0}
-                  title={<TabTitleText>Text Files</TabTitleText>}
-                >
-                  <div style={{ padding: "16px 0" }}>
+            <ExpandableSection toggleText="Files" isExpanded>
+              <div style={{ padding: "16px 0" }}>
+                <Grid hasGutter>
+                  <GridItem span={6}>
                     <Button
                       variant="secondary"
                       onClick={addTextFile}
@@ -577,86 +566,9 @@ const CreateBuildPage: React.FC = () => {
                     >
                       Add Text File
                     </Button>
-
-                    {textFiles.length === 0 ? (
-                      <div
-                        style={{
-                          textAlign: "center",
-                          padding: "20px",
-                          color: "#6A6E73",
-                        }}
-                      >
-                        No text files added. Click "Add Text File" to create a
-                        new file.
-                      </div>
-                    ) : (
-                      <List>
-                        {textFiles.map((file) => (
-                          <ListItem key={file.id}>
-                            <Card style={{ marginBottom: "16px" }}>
-                              <CardBody>
-                                <Grid hasGutter>
-                                  <GridItem span={10}>
-                                    <FormGroup
-                                      label="File Name"
-                                      fieldId={`filename-${file.id}`}
-                                    >
-                                      <TextInput
-                                        id={`filename-${file.id}`}
-                                        value={file.name}
-                                        onChange={(_event, value) =>
-                                          updateTextFile(file.id, "name", value)
-                                        }
-                                        placeholder="Enter file name"
-                                      />
-                                    </FormGroup>
-                                  </GridItem>
-                                  <GridItem span={2}>
-                                    <Button
-                                      variant="danger"
-                                      onClick={() => removeTextFile(file.id)}
-                                      icon={<TrashIcon />}
-                                      style={{ marginTop: "24px" }}
-                                    >
-                                      Remove
-                                    </Button>
-                                  </GridItem>
-                                  <GridItem span={12}>
-                                    <FormGroup
-                                      label="File Content"
-                                      fieldId={`content-${file.id}`}
-                                    >
-                                      <TextArea
-                                        id={`content-${file.id}`}
-                                        value={file.content}
-                                        onChange={(_event, value) =>
-                                          updateTextFile(
-                                            file.id,
-                                            "content",
-                                            value,
-                                          )
-                                        }
-                                        placeholder="Enter file content"
-                                        rows={8}
-                                      />
-                                    </FormGroup>
-                                  </GridItem>
-                                </Grid>
-                              </CardBody>
-                            </Card>
-                          </ListItem>
-                        ))}
-                      </List>
-                    )}
-                  </div>
-                </Tab>
-
-                <Tab
-                  eventKey={1}
-                  title={<TabTitleText>File Uploads</TabTitleText>}
-                >
-                  <div style={{ padding: "16px 0" }}>
-                    <FormGroup label="Upload Files" fieldId="file-upload">
+                  </GridItem>
+                  <GridItem span={6}>
+                    <FormGroup label="Upload File" fieldId="file-upload">
                       <FileUpload
                         id="file-upload"
                         type="dataURL"
@@ -672,58 +584,94 @@ const CreateBuildPage: React.FC = () => {
                         clearButtonText="Clear"
                       />
                     </FormGroup>
+                  </GridItem>
+                </Grid>
 
-                    {uploadedFiles.length === 0 ? (
-                      <div
-                        style={{
-                          textAlign: "center",
-                          padding: "20px",
-                          color: "#6A6E73",
-                        }}
-                      >
-                        No files uploaded. Use the file browser above to select
-                        files.
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: "16px" }}>
-                        <Title
-                          headingLevel="h4"
-                          size="md"
-                          style={{ marginBottom: "12px" }}
-                        >
-                          Uploaded Files
-                        </Title>
-                        <List>
-                          {uploadedFiles.map((file) => (
-                            <ListItem key={file.id}>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  alignItems: "center",
-                                  padding: "8px",
-                                }}
-                              >
-                                <span>
-                                  <UploadIcon style={{ marginRight: "8px" }} />
-                                  {file.name} (
-                                  {(file.file.size / 1024).toFixed(1)} KB)
-                                </span>
-                                <Button
-                                  variant="plain"
-                                  onClick={() => removeUploadedFile(file.id)}
-                                  icon={<TrashIcon />}
-                                  aria-label="Remove file"
-                                />
-                              </div>
-                            </ListItem>
-                          ))}
-                        </List>
-                      </div>
-                    )}
+                {/* Text files list */}
+                {textFiles.length > 0 && (
+                  <div style={{ marginTop: "16px" }}>
+                    <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
+                      Text Files
+                    </Title>
+                    <List>
+                      {textFiles.map((file) => (
+                        <ListItem key={file.id}>
+                          <Card style={{ marginBottom: "16px" }}>
+                            <CardBody>
+                              <Grid hasGutter>
+                                <GridItem span={10}>
+                                  <FormGroup label="File Name" fieldId={`filename-${file.id}`}>
+                                    <TextInput
+                                      id={`filename-${file.id}`}
+                                      value={file.name}
+                                      onChange={(_event, value) => updateTextFile(file.id, "name", value)}
+                                      placeholder="Enter file name"
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                                <GridItem span={2}>
+                                  <Button
+                                    variant="danger"
+                                    onClick={() => removeTextFile(file.id)}
+                                    icon={<TrashIcon />}
+                                    style={{ marginTop: "24px" }}
+                                  >
+                                    Remove
+                                  </Button>
+                                </GridItem>
+                                <GridItem span={12}>
+                                  <FormGroup label="File Content" fieldId={`content-${file.id}`}>
+                                    <TextArea
+                                      id={`content-${file.id}`}
+                                      value={file.content}
+                                      onChange={(_event, value) => updateTextFile(file.id, "content", value)}
+                                      placeholder="Enter file content"
+                                      rows={8}
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                              </Grid>
+                            </CardBody>
+                          </Card>
+                        </ListItem>
+                      ))}
+                    </List>
                   </div>
-                </Tab>
-              </Tabs>
+                )}
+
+                {/* Uploaded files list */}
+                {uploadedFiles.length > 0 && (
+                  <div style={{ marginTop: "16px" }}>
+                    <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
+                      Uploaded Files
+                    </Title>
+                    <List>
+                      {uploadedFiles.map((file) => (
+                        <ListItem key={file.id}>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              padding: "8px",
+                            }}
+                          >
+                            <span>
+                              {file.name} ({(file.file.size / 1024).toFixed(1)} KB)
+                            </span>
+                            <Button
+                              variant="plain"
+                              onClick={() => removeUploadedFile(file.id)}
+                              icon={<TrashIcon />}
+                              aria-label="Remove file"
+                            />
+                          </div>
+                        </ListItem>
+                      ))}
+                    </List>
+                  </div>
+                )}
+              </div>
             </ExpandableSection>
 
             <ActionGroup style={{ marginTop: "32px" }}>
