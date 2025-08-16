@@ -124,6 +124,7 @@ const CreateBuildPage: React.FC = () => {
   const [textFiles, setTextFiles] = useState<TextFile[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [expectedFiles, setExpectedFiles] = useState<string[]>([]);
 
 
   const initializedFromTemplate = useRef(false);
@@ -162,28 +163,10 @@ const CreateBuildPage: React.FC = () => {
     }));
 
     if (t.sourceFiles && t.sourceFiles.length > 0) {
-      setTextFiles((prev) => {
-        const existing = new Set(prev.map((f) => f.name));
-        const seenIncoming = new Set<string>();
-        const toAdd = t!
-          .sourceFiles!.map((p) => p.trim())
-          .filter((p) => p.length > 0)
-          // de-duplicate within incoming list and against existing entries
-          .filter((p) => {
-            if (existing.has(p) || seenIncoming.has(p)) return false;
-            seenIncoming.add(p);
-            return true;
-          })
-          .map(
-            (p) =>
-              ({
-                id: `text-${crypto.randomUUID?.() || Date.now()}`,
-                name: p,
-                content: "",
-              }) as TextFile,
-          );
-        return [...prev, ...toAdd];
-      });
+      const templateFiles = t.sourceFiles
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      setExpectedFiles(templateFiles);
     }
 
     initializedFromTemplate.current = true;
@@ -375,6 +358,7 @@ const CreateBuildPage: React.FC = () => {
         });
         setTextFiles([]);
         setUploadedFiles([]);
+        setExpectedFiles([]);
 
         setTimeout(() => {
           navigate("/builds");
@@ -648,14 +632,44 @@ const CreateBuildPage: React.FC = () => {
                           </SplitItem>
                         </Split>
                       </StackItem>
-                      
                       <StackItem>
                         <p style={{ color: "var(--pf-v5-global--Color--200)", margin: 0 }}>
                           Upload files to include in your build, or create text files directly in the interface.
                         </p>
                       </StackItem>
-                      
-                      {/* File Upload - Primary Option */}
+                      {expectedFiles.length > 0 && (
+                        <StackItem>
+                          <div
+                            style={{
+                              backgroundColor: "var(--pf-v5-global--info-color--100)",
+                              color: "var(--pf-v5-global--info-color--200)",
+                              padding: "12px 16px",
+                              borderRadius: "4px",
+                              border: "1px solid var(--pf-v5-global--info-color--100)",
+                              fontSize: "0.875rem"
+                            }}
+                          >
+                            <strong>Template expects these files:</strong>
+                            <ul style={{ margin: "8px 0 0 0", paddingLeft: "20px" }}>
+                              {expectedFiles.map((filename, index) => (
+                                <li key={index} style={{ margin: "4px 0" }}>
+                                  <code style={{
+                                    backgroundColor: "var(--pf-v5-global--BackgroundColor--200)",
+                                    padding: "2px 6px",
+                                    borderRadius: "3px",
+                                    fontSize: "0.8rem"
+                                  }}>
+                                    {filename}
+                                  </code>
+                                </li>
+                              ))}
+                            </ul>
+                            <p style={{ margin: "8px 0 0 0", fontSize: "0.8rem" }}>
+                              Please upload or create these files to match the template configuration.
+                            </p>
+                          </div>
+                        </StackItem>
+                      )}
                       <StackItem>
                         <Card isPlain>
                           <CardBody>
@@ -685,8 +699,6 @@ const CreateBuildPage: React.FC = () => {
                           </CardBody>
                         </Card>
                       </StackItem>
-                      
-                      {/* Text File Creation */}
                       <StackItem>
                         <Split hasGutter>
                           <SplitItem>
@@ -821,7 +833,6 @@ const CreateBuildPage: React.FC = () => {
                 </Card>
               </StackItem>
 
-              {/* Action Buttons */}
               <StackItem>
                 <Card>
                   <CardBody>
