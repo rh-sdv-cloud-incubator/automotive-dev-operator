@@ -12,16 +12,20 @@ import {
   CardBody,
   Grid,
   GridItem,
-  ActionGroup,
-  Divider,
   FileUpload,
   ExpandableSection,
-  List,
-  ListItem,
   Flex,
   FlexItem,
+  Stack,
+  StackItem,
+  Split,
+  SplitItem,
+  Badge,
+  Popover,
+
+
 } from "@patternfly/react-core";
-import { PlusCircleIcon, TrashIcon, UploadIcon } from "@patternfly/react-icons";
+import { PlusCircleIcon, TrashIcon, InfoCircleIcon } from "@patternfly/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
 
 interface TextFile {
@@ -67,6 +71,32 @@ interface BuildTemplateResponse {
   sourceFiles?: string[];
 }
 
+const PopoverLabel: React.FC<{ label: string; popoverContent: string; isRequired?: boolean }> = ({ label, popoverContent, isRequired }) => (
+  <span>
+    {label}
+    {isRequired && <span style={{ color: "var(--pf-v5-global--danger-color--100)" }}> *</span>}
+    <Popover
+      aria-label={`${label} information`}
+      bodyContent={popoverContent}
+    >
+      <button
+        type="button"
+        aria-label={`More info for ${label}`}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: 'var(--pf-v5-global--Color--200)',
+          marginLeft: '4px',
+          cursor: 'pointer',
+          fontSize: '0.875rem'
+        }}
+      >
+        <InfoCircleIcon />
+      </button>
+    </Popover>
+  </span>
+);
+
 const CreateBuildPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -94,6 +124,7 @@ const CreateBuildPage: React.FC = () => {
   const [textFiles, setTextFiles] = useState<TextFile[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+
 
   const initializedFromTemplate = useRef(false);
   useEffect(() => {
@@ -361,335 +392,472 @@ const CreateBuildPage: React.FC = () => {
 
   return (
     <PageSection>
-      <Title headingLevel="h1" size="2xl" style={{ marginBottom: "24px" }}>
-        Create New Image Build
-      </Title>
+      <Stack hasGutter>
+        <StackItem>
+          <Title headingLevel="h1" size="2xl">
+            Create New Image Build
+          </Title>
+        </StackItem>
 
-      {alert && (
-        <Alert
-          variant={alert.type}
-          title={alert.message}
-          style={{ marginBottom: "24px" }}
-          isInline
-        />
-      )}
+        {alert && (
+          <StackItem>
+            <Alert
+              variant={alert.type}
+              title={alert.message}
+              isInline
+            />
+          </StackItem>
+        )}
 
-      <Card>
-        <CardBody>
+        <StackItem>
           <Form onSubmit={handleSubmit}>
-            <Grid hasGutter>
-              <GridItem span={6}>
-                <FormGroup label="Build Name" isRequired fieldId="name">
-                  <TextInput
-                    id="name"
-                    value={formData.name}
-                    onChange={(_event, value) =>
-                      handleInputChange("name", value)
-                    }
-                    placeholder="Enter a unique name for this build"
-                    isRequired
-                  />
-                </FormGroup>
-              </GridItem>
+            <Stack hasGutter>
+              {/* Basic Build Information */}
+              <StackItem>
+                <Card>
+                  <CardBody>
+                    <Stack hasGutter>
+                      <StackItem>
+                        <Title headingLevel="h2" size="lg">
+                          Basic Information
+                        </Title>
+                      </StackItem>
+                      <StackItem>
+                        <Grid hasGutter>
+                          <GridItem span={6}>
+                            <FormGroup 
+                              label={<PopoverLabel label="Build Name" popoverContent="A unique identifier for your build" isRequired />} 
+                              fieldId="name"
+                            >
+                              <TextInput
+                                id="name"
+                                value={formData.name}
+                                onChange={(_event, value) =>
+                                  handleInputChange("name", value)
+                                }
+                                placeholder="Enter a unique name for this build"
+                                isRequired
+                              />
+                            </FormGroup>
+                          </GridItem>
+                          <GridItem span={12}>
+                            <FormGroup
+                              label={<PopoverLabel label="Manifest Content" popoverContent="YAML configuration that defines your build requirements" isRequired />}
+                              fieldId="manifest"
+                            >
+                              <TextArea
+                                id="manifest"
+                                value={formData.manifest}
+                                onChange={(_event, value) =>
+                                  handleInputChange("manifest", value)
+                                }
+                                placeholder="Enter your YAML manifest content here..."
+                                rows={12}
+                                isRequired
+                              />
+                            </FormGroup>
+                          </GridItem>
+                        </Grid>
+                      </StackItem>
+                    </Stack>
+                  </CardBody>
+                </Card>
+              </StackItem>
 
-              <GridItem span={12}>
-                <FormGroup
-                  label="Manifest Content"
-                  isRequired
-                  fieldId="manifest"
-                >
-                  <TextArea
-                    id="manifest"
-                    value={formData.manifest}
-                    onChange={(_event, value) =>
-                      handleInputChange("manifest", value)
-                    }
-                    placeholder="Enter your YAML manifest content here..."
-                    rows={10}
-                    isRequired
-                  />
-                </FormGroup>
-              </GridItem>
+              {/* Build Configuration */}
+              <StackItem>
+                <Card>
+                  <CardBody>
+                    <Stack hasGutter>
+                      <StackItem>
+                        <Title headingLevel="h2" size="lg">
+                          Build Configuration
+                        </Title>
+                      </StackItem>
+                      <StackItem>
+                        <Grid hasGutter>
+                          <GridItem xl={4} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Distribution" popoverContent="Target distribution (e.g., autosd, cs9)" />} fieldId="distro">
+                              <TextInput
+                                id="distro"
+                                value={formData.distro}
+                                onChange={(_event, value) =>
+                                  handleInputChange("distro", value)
+                                }
+                                placeholder="autosd"
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-              <GridItem span={12}>
-                <Divider style={{ margin: "24px 0" }} />
-                <Title
-                  headingLevel="h2"
-                  size="lg"
-                  style={{ marginBottom: "16px" }}
-                >
-                  Build Configuration
-                </Title>
-              </GridItem>
+                          <GridItem xl={4} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Target Platform" popoverContent="target (e.g., qemu, ridesx4)" />} fieldId="target">
+                              <TextInput
+                                id="target"
+                                value={formData.target}
+                                onChange={(_event, value) =>
+                                  handleInputChange("target", value)
+                                }
+                                placeholder="qemu"
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-              <GridItem span={4}>
-                <FormGroup label="Distribution" fieldId="distro">
-                  <TextInput
-                    id="distro"
-                    value={formData.distro}
-                    onChange={(_event, value) =>
-                      handleInputChange("distro", value)
-                    }
-                    placeholder="cs9"
-                  />
-                </FormGroup>
-              </GridItem>
+                          <GridItem xl={4} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Architecture" popoverContent="CPU architecture (arm64, amd64)" isRequired />} fieldId="architecture">
+                              <TextInput
+                                id="architecture"
+                                value={formData.architecture}
+                                onChange={(_event, value) =>
+                                  handleInputChange("architecture", value)
+                                }
+                                placeholder="arm64"
+                                isRequired
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-              <GridItem span={4}>
-                <FormGroup label="Target" fieldId="target">
-                  <TextInput
-                    id="target"
-                    value={formData.target}
-                    onChange={(_event, value) =>
-                      handleInputChange("target", value)
-                    }
-                    placeholder="qemu"
-                  />
-                </FormGroup>
-              </GridItem>
+                          <GridItem xl={6} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Export Format" popoverContent="format (e.g., image, qcow2)" />} fieldId="exportFormat">
+                              <TextInput
+                                id="exportFormat"
+                                value={formData.exportFormat}
+                                onChange={(_event, value) =>
+                                  handleInputChange("exportFormat", value)
+                                }
+                                placeholder="image"
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-              <GridItem span={4}>
-                <FormGroup label="Architecture" isRequired fieldId="architecture">
-                  <TextInput
-                    id="architecture"
-                    value={formData.architecture}
-                    onChange={(_event, value) =>
-                      handleInputChange("architecture", value)
-                    }
-                    placeholder="Required, e.g. arm64 or amd64"
-                    isRequired
-                  />
-                </FormGroup>
-              </GridItem>
+                          <GridItem xl={6} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Build Mode" popoverContent="Build mode (image, package)" />} fieldId="mode">
+                              <TextInput
+                                id="mode"
+                                value={formData.mode}
+                                onChange={(_event, value) =>
+                                  handleInputChange("mode", value)
+                                }
+                                placeholder="image"
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-              <GridItem span={6}>
-                <FormGroup label="Export Format" fieldId="exportFormat">
-                  <TextInput
-                    id="exportFormat"
-                    value={formData.exportFormat}
-                    onChange={(_event, value) =>
-                      handleInputChange("exportFormat", value)
-                    }
-                    placeholder="image"
-                  />
-                </FormGroup>
-              </GridItem>
+                          <GridItem span={12}>
+                            <FormGroup
+                              label={<PopoverLabel label="Automotive Image Builder Container" popoverContent="Container image used for building" />}
+                              fieldId="automotiveImageBuilder"
+                            >
+                              <TextInput
+                                id="automotiveImageBuilder"
+                                value={formData.automotiveImageBuilder}
+                                onChange={(_event, value) =>
+                                  handleInputChange("automotiveImageBuilder", value)
+                                }
+                                placeholder="quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
+                              />
+                            </FormGroup>
+                          </GridItem>
+                        </Grid>
+                      </StackItem>
+                    </Stack>
+                  </CardBody>
+                </Card>
+              </StackItem>
 
-              <GridItem span={6}>
-                <FormGroup label="Mode" fieldId="mode">
-                  <TextInput
-                    id="mode"
-                    value={formData.mode}
-                    onChange={(_event, value) =>
-                      handleInputChange("mode", value)
-                    }
-                    placeholder="image"
-                  />
-                </FormGroup>
-              </GridItem>
-
-              <GridItem span={12}>
-                <FormGroup
-                  label="Automotive Image Builder Container"
-                  fieldId="automotiveImageBuilder"
-                >
-                  <TextInput
-                    id="automotiveImageBuilder"
-                    value={formData.automotiveImageBuilder}
-                    onChange={(_event, value) =>
-                      handleInputChange("automotiveImageBuilder", value)
-                    }
-                    placeholder="quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
-                  />
-                </FormGroup>
-              </GridItem>
-
-              <GridItem span={12}>
-                <Divider style={{ margin: "24px 0" }} />
-                <ExpandableSection
-                  toggleText="Advanced options"
-                  isExpanded={isAdvancedOpen}
-                  onToggle={(_event, expanded) =>
-                    setIsAdvancedOpen(expanded as boolean)
-                  }
-                >
-                  <Grid hasGutter>
-                    <GridItem span={6}>
-                      <FormGroup
-                        label="AIB Extra Arguments"
-                        fieldId="aibExtraArgs"
-                      >
-                        <TextInput
-                          id="aibExtraArgs"
-                          value={formData.aibExtraArgs}
-                          onChange={(_event, value) =>
-                            handleInputChange("aibExtraArgs", value)
-                          }
-                          placeholder="--verbose --debug"
-                        />
-                      </FormGroup>
-                    </GridItem>
-
-                    <GridItem span={6}>
-                      <FormGroup
-                        label="AIB Override Arguments"
-                        fieldId="aibOverrideArgs"
-                      >
-                        <TextInput
-                          id="aibOverrideArgs"
-                          value={formData.aibOverrideArgs}
-                          onChange={(_event, value) =>
-                            handleInputChange("aibOverrideArgs", value)
-                          }
-                          placeholder="Complete override of AIB arguments"
-                        />
-                      </FormGroup>
-                    </GridItem>
-                  </Grid>
-                </ExpandableSection>
-              </GridItem>
-            </Grid>
-
-            <Divider style={{ margin: "24px 0" }} />
-            <Title headingLevel="h2" size="lg" style={{ marginBottom: "16px" }}>
-              Files
-            </Title>
-
-            <ExpandableSection toggleText="Files" isExpanded>
-              <div style={{ padding: "16px 0" }}>
-                <Flex alignItems={{ default: "alignItemsCenter" }} style={{ gap: 16, flexWrap: "wrap" }}>
-                  <FlexItem>
-                    <Button
-                      variant="secondary"
-                      onClick={addTextFile}
-                      icon={<PlusCircleIcon />}
+              {/* Advanced Options */}
+              <StackItem>
+                <Card>
+                  <CardBody>
+                    <ExpandableSection
+                      toggleText="Advanced Options"
+                      isExpanded={isAdvancedOpen}
+                      onToggle={(_event, expanded) =>
+                        setIsAdvancedOpen(expanded as boolean)
+                      }
                     >
-                      Add Text File
-                    </Button>
-                  </FlexItem>
-                  <FlexItem>
-                    <div style={{ maxWidth: 520 }}>
-                      <FormGroup label="Upload File" fieldId="file-upload">
-                        <FileUpload
-                          id="file-upload"
-                          type="dataURL"
-                          value=""
-                          filename=""
-                          filenamePlaceholder="Choose file to upload"
-                          onFileInputChange={(_event, file) => {
-                            if (file) {
-                              handleFileUpload(file);
-                            }
-                          }}
-                          browseButtonText="Choose file"
-                          clearButtonText="Clear"
-                        />
-                      </FormGroup>
-                    </div>
-                  </FlexItem>
-                </Flex>
+                      <div style={{ padding: "16px 0" }}>
+                        <Grid hasGutter>
+                          <GridItem span={6}>
+                            <FormGroup
+                              label={<PopoverLabel label="AIB Extra Arguments" popoverContent="Additional arguments for automotive-image-builder (e.g., --fusa, --define)" />}
+                              fieldId="aibExtraArgs"
+                            >
+                              <TextInput
+                                id="aibExtraArgs"
+                                value={formData.aibExtraArgs}
+                                onChange={(_event, value) =>
+                                  handleInputChange("aibExtraArgs", value)
+                                }
+                                placeholder="--verbose --debug"
+                              />
+                            </FormGroup>
+                          </GridItem>
 
-                {textFiles.length > 0 && (
-                  <div style={{ marginTop: "16px" }}>
-                    <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
-                      Text Files
-                    </Title>
-                    <List>
-                      {textFiles.map((file) => (
-                        <ListItem key={file.id}>
-                          <Card style={{ marginBottom: "16px" }}>
-                            <CardBody>
-                              <Grid hasGutter>
-                                <GridItem span={10}>
-                                  <FormGroup label="File Name" fieldId={`filename-${file.id}`}>
-                                    <TextInput
-                                      id={`filename-${file.id}`}
-                                      value={file.name}
-                                      onChange={(_event, value) => updateTextFile(file.id, "name", value)}
-                                      placeholder="Enter file name"
-                                    />
-                                  </FormGroup>
-                                </GridItem>
-                                <GridItem span={2}>
-                                  <Button
-                                    variant="danger"
-                                    onClick={() => removeTextFile(file.id)}
-                                    icon={<TrashIcon />}
-                                    style={{ marginTop: "24px" }}
-                                  >
-                                    Remove
-                                  </Button>
-                                </GridItem>
-                                <GridItem span={12}>
-                                  <FormGroup label="File Content" fieldId={`content-${file.id}`}>
-                                    <TextArea
-                                      id={`content-${file.id}`}
-                                      value={file.content}
-                                      onChange={(_event, value) => updateTextFile(file.id, "content", value)}
-                                      placeholder="Enter file content"
-                                      rows={8}
-                                    />
-                                  </FormGroup>
-                                </GridItem>
-                              </Grid>
-                            </CardBody>
-                          </Card>
-                        </ListItem>
-                      ))}
-                    </List>
-                  </div>
-                )}
+                          <GridItem span={6}>
+                            <FormGroup
+                              label={<PopoverLabel label="AIB Override Arguments" popoverContent="arguments to be passed as-is to automotive-image-builder" />}
+                              fieldId="aibOverrideArgs"
+                            >
+                              <TextInput
+                                id="aibOverrideArgs"
+                                value={formData.aibOverrideArgs}
+                                onChange={(_event, value) =>
+                                  handleInputChange("aibOverrideArgs", value)
+                                }
+                                placeholder="Complete override of AIB arguments"
+                              />
+                            </FormGroup>
+                          </GridItem>
+                        </Grid>
+                      </div>
+                    </ExpandableSection>
+                  </CardBody>
+                </Card>
+              </StackItem>
 
-                {uploadedFiles.length > 0 && (
-                  <div style={{ marginTop: "16px" }}>
-                    <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
-                      Uploaded Files
-                    </Title>
-                    <List>
-                      {uploadedFiles.map((file) => (
-                        <ListItem key={file.id}>
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              padding: "8px",
-                            }}
-                          >
-                            <span>
-                              {file.name} ({(file.file.size / 1024).toFixed(1)} KB)
-                            </span>
+              {/* Files Section */}
+              <StackItem>
+                <Card>
+                  <CardBody>
+                    <Stack hasGutter>
+                      <StackItem>
+                        <Split hasGutter>
+                          <SplitItem>
+                            <Title headingLevel="h2" size="lg">
+                              Files
+                            </Title>
+                          </SplitItem>
+                          <SplitItem isFilled />
+                          <SplitItem>
+                            <Flex spaceItems={{ default: "spaceItemsSm" }}>
+                              {textFiles.length > 0 && (
+                                <FlexItem>
+                                  <Badge isRead>
+                                    {textFiles.length} text file{textFiles.length !== 1 ? 's' : ''}
+                                  </Badge>
+                                </FlexItem>
+                              )}
+                              {uploadedFiles.length > 0 && (
+                                <FlexItem>
+                                  <Badge isRead>
+                                    {uploadedFiles.length} uploaded file{uploadedFiles.length !== 1 ? 's' : ''}
+                                  </Badge>
+                                </FlexItem>
+                              )}
+                            </Flex>
+                          </SplitItem>
+                        </Split>
+                      </StackItem>
+                      
+                      <StackItem>
+                        <p style={{ color: "var(--pf-v5-global--Color--200)", margin: 0 }}>
+                          Upload files to include in your build, or create text files directly in the interface.
+                        </p>
+                      </StackItem>
+                      
+                      {/* File Upload - Primary Option */}
+                      <StackItem>
+                        <Card isPlain>
+                          <CardBody>
+                            <Stack hasGutter>
+                              <StackItem>
+                                <Title headingLevel="h3" size="md">
+                                  Upload Files
+                                </Title>
+                              </StackItem>
+                              <StackItem>
+                                <FileUpload
+                                  id="file-upload"
+                                  type="dataURL"
+                                  value=""
+                                  filename=""
+                                  filenamePlaceholder="Drag and drop files here or click to browse"
+                                  onFileInputChange={(_event, file) => {
+                                    if (file) {
+                                      handleFileUpload(file);
+                                    }
+                                  }}
+                                  browseButtonText="Browse files"
+                                  clearButtonText="Clear"
+                                />
+                              </StackItem>
+                            </Stack>
+                          </CardBody>
+                        </Card>
+                      </StackItem>
+                      
+                      {/* Text File Creation */}
+                      <StackItem>
+                        <Split hasGutter>
+                          <SplitItem>
+                            <p style={{ color: "var(--pf-v5-global--Color--200)", margin: 0, fontSize: "0.875rem" }}>
+                              Or create text files directly in the interface:
+                            </p>
+                          </SplitItem>
+                          <SplitItem isFilled />
+                          <SplitItem>
                             <Button
-                              variant="plain"
-                              onClick={() => removeUploadedFile(file.id)}
-                              icon={<TrashIcon />}
-                              aria-label="Remove file"
-                            />
-                          </div>
-                        </ListItem>
-                      ))}
-                    </List>
-                  </div>
-                )}
-              </div>
-            </ExpandableSection>
+                              variant="link"
+                              size="sm"
+                              onClick={addTextFile}
+                              icon={<PlusCircleIcon />}
+                            >
+                              Add Text File
+                            </Button>
+                          </SplitItem>
+                        </Split>
+                      </StackItem>
 
-            <ActionGroup style={{ marginTop: "32px" }}>
-              <Button
-                variant="primary"
-                type="submit"
-                isLoading={isSubmitting}
-                isDisabled={!formData.name || !formData.manifest || !formData.architecture}
-              >
-                {isSubmitting ? "Creating Build..." : "Create Build"}
-              </Button>
-              <Button variant="link" onClick={() => navigate("/builds")}>
-                Cancel
-              </Button>
-            </ActionGroup>
+                      {textFiles.length > 0 && (
+                        <StackItem>
+                          <Stack hasGutter>
+                            <StackItem>
+                              <Title headingLevel="h3" size="md">
+                                Text Files
+                              </Title>
+                            </StackItem>
+                            <StackItem>
+                              <Stack hasGutter>
+                                {textFiles.map((file) => (
+                                  <StackItem key={file.id}>
+                                    <Card>
+                                      <CardBody>
+                                        <Stack hasGutter>
+                                          <StackItem>
+                                            <Split hasGutter>
+                                              <SplitItem isFilled>
+                                                <FormGroup label="File Name" fieldId={`filename-${file.id}`}>
+                                                  <TextInput
+                                                    id={`filename-${file.id}`}
+                                                    value={file.name}
+                                                    onChange={(_event, value) => updateTextFile(file.id, "name", value)}
+                                                    placeholder="Enter file name"
+                                                  />
+                                                </FormGroup>
+                                              </SplitItem>
+                                              <SplitItem>
+                                                <Button
+                                                  variant="danger"
+                                                  size="sm"
+                                                  onClick={() => removeTextFile(file.id)}
+                                                  icon={<TrashIcon />}
+                                                  style={{ marginTop: "24px" }}
+                                                >
+                                                  Remove
+                                                </Button>
+                                              </SplitItem>
+                                            </Split>
+                                          </StackItem>
+                                          <StackItem>
+                                            <FormGroup label="File Content" fieldId={`content-${file.id}`}>
+                                              <TextArea
+                                                id={`content-${file.id}`}
+                                                value={file.content}
+                                                onChange={(_event, value) => updateTextFile(file.id, "content", value)}
+                                                placeholder="Enter file content"
+                                                rows={8}
+                                              />
+                                            </FormGroup>
+                                          </StackItem>
+                                        </Stack>
+                                      </CardBody>
+                                    </Card>
+                                  </StackItem>
+                                ))}
+                              </Stack>
+                            </StackItem>
+                          </Stack>
+                        </StackItem>
+                      )}
+
+                      {uploadedFiles.length > 0 && (
+                        <StackItem>
+                          <Stack hasGutter>
+                            <StackItem>
+                              <Title headingLevel="h3" size="md">
+                                Uploaded Files
+                              </Title>
+                            </StackItem>
+                            <StackItem>
+                              <Stack hasGutter>
+                                {uploadedFiles.map((file) => (
+                                  <StackItem key={file.id}>
+                                    <Card isPlain>
+                                      <CardBody>
+                                        <Split hasGutter>
+                                          <SplitItem isFilled>
+                                            <Flex direction={{ default: "column" }}>
+                                              <FlexItem>
+                                                <strong>{file.name}</strong>
+                                              </FlexItem>
+                                              <FlexItem>
+                                                <small>
+                                                  Size: {(file.file.size / 1024).toFixed(1)} KB
+                                                </small>
+                                              </FlexItem>
+                                            </Flex>
+                                          </SplitItem>
+                                          <SplitItem>
+                                            <Button
+                                              variant="plain"
+                                              size="sm"
+                                              onClick={() => removeUploadedFile(file.id)}
+                                              icon={<TrashIcon />}
+                                              aria-label="Remove file"
+                                            />
+                                          </SplitItem>
+                                        </Split>
+                                      </CardBody>
+                                    </Card>
+                                  </StackItem>
+                                ))}
+                              </Stack>
+                            </StackItem>
+                          </Stack>
+                        </StackItem>
+                      )}
+                    </Stack>
+                  </CardBody>
+                </Card>
+              </StackItem>
+
+              {/* Action Buttons */}
+              <StackItem>
+                <Card>
+                  <CardBody>
+                    <Split hasGutter>
+                      <SplitItem>
+                        <Button
+                          variant="primary"
+                          type="submit"
+                          size="lg"
+                          isLoading={isSubmitting}
+                          isDisabled={!formData.name || !formData.manifest || !formData.architecture}
+                        >
+                          {isSubmitting ? "Creating Build..." : "Create Build"}
+                        </Button>
+                      </SplitItem>
+                      <SplitItem>
+                        <Button variant="link" onClick={() => navigate("/builds")}>
+                          Cancel
+                        </Button>
+                      </SplitItem>
+                      <SplitItem isFilled />
+                      <SplitItem>
+                        <small style={{ color: "var(--pf-v5-global--Color--200)" }}>
+                          {!formData.name && "Build name required"}
+                          {!formData.manifest && formData.name && "Manifest content required"}
+                          {!formData.architecture && formData.name && formData.manifest && "Architecture required"}
+                        </small>
+                      </SplitItem>
+                    </Split>
+                  </CardBody>
+                </Card>
+              </StackItem>
+            </Stack>
           </Form>
-        </CardBody>
-      </Card>
+        </StackItem>
+      </Stack>
     </PageSection>
   );
 };
