@@ -93,7 +93,7 @@ func main() {
 	buildCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "follow logs of the build")
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
-	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder (bypasses defaults except internal requirements)")
+	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder")
 	_ = buildCmd.MarkFlagRequired("arch")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
