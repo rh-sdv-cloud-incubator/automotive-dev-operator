@@ -68,7 +68,6 @@ mount --bind "$destPath" "$osbuildPath"
 
 cd $(workspaces.shared-workspace.path)
 
-# Determine file extension
 if [ "$(params.export-format)" = "image" ]; then
   file_extension=".raw"
 elif [ "$(params.export-format)" = "qcow2" ]; then
@@ -121,7 +120,49 @@ case "$arch" in
     ;;
 esac
 
-build_command="automotive-image-builder --verbose \
+get_flag_value() {
+  flag_name="$1"; shift
+  args_str="$*"
+  val=$(echo "$args_str" | sed -nE "s/.*${flag_name}=([^ ]+).*/\1/p" | head -n1)
+  if [ -n "$val" ]; then
+    echo "$val"; return 0
+  fi
+  val=$(echo "$args_str" | awk -v f="$flag_name" '{for (i=1;i<=NF;i++) if ($i==f && (i+1)<=NF) {print $(i+1); exit}}')
+  [ -n "$val" ] && echo "$val"
+}
+
+USE_OVERRIDE=false
+if [ -f "$AIB_OVERRIDE_ARGS_FILE" ]; then
+  USE_OVERRIDE=true
+  override_export=$(get_flag_value "--export" $AIB_ARGS)
+  override_distro=$(get_flag_value "--distro" $AIB_ARGS)
+  override_target=$(get_flag_value "--target" $AIB_ARGS)
+  [ -n "$override_distro" ] && cleanName="$override_distro-${cleanName#*-}"
+  [ -n "$override_target" ] && cleanName="${cleanName%-*}-$override_target"
+  if [ -n "$override_export" ]; then
+    case "$override_export" in
+      image)
+        file_extension=".raw" ;;
+      qcow2)
+        file_extension=".qcow2" ;;
+      *)
+        file_extension=".$override_export" ;;
+    esac
+  fi
+  exportFile=${cleanName}${file_extension}
+fi
+
+if [ "$USE_OVERRIDE" = true ]; then
+  build_command="automotive-image-builder --verbose \
+  build \
+  $CUSTOM_DEFS \
+  --build-dir=/output/_build \
+  --osbuild-manifest=/output/image.json \
+  $AIB_ARGS \
+  $MANIFEST_FILE \
+  /output/${exportFile}"
+else
+  build_command="automotive-image-builder --verbose \
   build \
   $CUSTOM_DEFS \
   --distro $(params.distro) \
@@ -134,6 +175,7 @@ build_command="automotive-image-builder --verbose \
   $AIB_ARGS \
   $MANIFEST_FILE \
   /output/${exportFile}"
+fi
 
 echo "contents of shared workspace before build:"
 ls -la $(workspaces.shared-workspace.path)/

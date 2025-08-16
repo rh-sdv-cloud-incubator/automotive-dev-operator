@@ -5,7 +5,7 @@ A React-based web interface for creating and managing automotive OS image builds
 ## Features
 
 - **Create Builds**: Interactive form with free text inputs for all build parameters
-- **File Management**: Create text files and upload binary files for builds
+- **External Files**: Create text files and upload binary files for builds
 - **Monitor Builds**: Real-time build status and progress tracking
 - **View Logs**: Stream build logs in real-time
 - **Download Artifacts**: Download completed build artifacts
@@ -78,29 +78,6 @@ All form fields support free text input as requested:
 - **Export Format**: Output format (default: image)
 - **Mode**: Build mode (default: image)
 - **Container Image**: automotive-image-builder container to use
-- **Custom Definitions**: Additional environment definitions
 - **AIB Extra Args**: Additional arguments for automotive-image-builder
 - **AIB Override Args**: Complete override of AIB arguments
 - **Enable Artifact Downloads**: Allow downloading build artifacts (recommended)
-
-### File Management
-
-The web UI provides comprehensive file management capabilities:
-
-#### Text Files
-- Create new text files directly in the browser
-- Edit file names and content in real-time
-- Support for any text-based configuration files
-- Multiple files can be created and managed
-
-#### File Uploads
-- Upload binary files from your local system
-- Support for any file type (images, archives, binaries, etc.)
-- File size and type information displayed
-- Easy removal of uploaded files
-
-#### File Integration
-- All files (text and uploaded) are automatically uploaded to the build after creation
-- Files are available in the build environment at `/workspace/shared/`
-- Text files are created with the specified names and content
-- Uploaded files retain their original names and content

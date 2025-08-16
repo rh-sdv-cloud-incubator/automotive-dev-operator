@@ -94,6 +94,7 @@ func main() {
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
 	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder (bypasses defaults except internal requirements)")
+	_ = buildCmd.MarkFlagRequired("arch")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
 	downloadCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication (e.g., OpenShift access token)")
@@ -338,6 +339,10 @@ func validateBuildRequirements() error {
 
 	if buildName == "" {
 		return fmt.Errorf("name is required")
+	}
+
+	if strings.TrimSpace(architecture) == "" {
+		return fmt.Errorf("--arch is required")
 	}
 
 	return nil

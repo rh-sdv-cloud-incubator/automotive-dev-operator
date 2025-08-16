@@ -336,7 +336,7 @@ const CreateBuildPage: React.FC = () => {
           manifestFileName: "manifest.aib.yml",
           distro: "autosd",
           target: "qemu",
-          architecture: "arm64",
+          architecture: "",
           exportFormat: "image",
           mode: "image",
           automotiveImageBuilder:
@@ -392,22 +392,6 @@ const CreateBuildPage: React.FC = () => {
                     }
                     placeholder="Enter a unique name for this build"
                     isRequired
-                  />
-                </FormGroup>
-              </GridItem>
-
-              <GridItem span={6}>
-                <FormGroup
-                  label="Manifest File Name"
-                  fieldId="manifestFileName"
-                >
-                  <TextInput
-                    id="manifestFileName"
-                    value={formData.manifestFileName}
-                    onChange={(_event, value) =>
-                      handleInputChange("manifestFileName", value)
-                    }
-                    placeholder="manifest.aib.yml"
                   />
                 </FormGroup>
               </GridItem>
@@ -469,14 +453,15 @@ const CreateBuildPage: React.FC = () => {
               </GridItem>
 
               <GridItem span={4}>
-                <FormGroup label="Architecture" fieldId="architecture">
+                <FormGroup label="Architecture" isRequired fieldId="architecture">
                   <TextInput
                     id="architecture"
                     value={formData.architecture}
                     onChange={(_event, value) =>
                       handleInputChange("architecture", value)
                     }
-                    placeholder="arm64"
+                    placeholder="Required, e.g. arm64 or amd64"
+                    isRequired
                   />
                 </FormGroup>
               </GridItem>
@@ -574,7 +559,7 @@ const CreateBuildPage: React.FC = () => {
               Files
             </Title>
 
-            <ExpandableSection toggleText="File Management" isExpanded>
+            <ExpandableSection toggleText="External Files" isExpanded>
               <Tabs
                 activeKey={activeFileTab}
                 onSelect={(_event, tabIndex) => setActiveFileTab(tabIndex)}
@@ -746,7 +731,7 @@ const CreateBuildPage: React.FC = () => {
                 variant="primary"
                 type="submit"
                 isLoading={isSubmitting}
-                isDisabled={!formData.name || !formData.manifest}
+                isDisabled={!formData.name || !formData.manifest || !formData.architecture}
               >
                 {isSubmitting ? "Creating Build..." : "Create Build"}
               </Button>
