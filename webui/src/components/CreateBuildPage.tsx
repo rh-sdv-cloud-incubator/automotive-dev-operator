@@ -18,6 +18,8 @@ import {
   ExpandableSection,
   List,
   ListItem,
+  Flex,
+  FlexItem,
 } from "@patternfly/react-core";
 import { PlusCircleIcon, TrashIcon, UploadIcon } from "@patternfly/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -343,7 +345,6 @@ const CreateBuildPage: React.FC = () => {
         setTextFiles([]);
         setUploadedFiles([]);
 
-        // Navigate to builds list after 2 seconds
         setTimeout(() => {
           navigate("/builds");
         }, 2000);
@@ -556,38 +557,38 @@ const CreateBuildPage: React.FC = () => {
 
             <ExpandableSection toggleText="Files" isExpanded>
               <div style={{ padding: "16px 0" }}>
-                <Grid hasGutter>
-                  <GridItem span={6}>
+                <Flex alignItems={{ default: "alignItemsCenter" }} style={{ gap: 16, flexWrap: "wrap" }}>
+                  <FlexItem>
                     <Button
                       variant="secondary"
                       onClick={addTextFile}
                       icon={<PlusCircleIcon />}
-                      style={{ marginBottom: "16px" }}
                     >
                       Add Text File
                     </Button>
-                  </GridItem>
-                  <GridItem span={6}>
-                    <FormGroup label="Upload File" fieldId="file-upload">
-                      <FileUpload
-                        id="file-upload"
-                        type="dataURL"
-                        value=""
-                        filename=""
-                        filenamePlaceholder="Choose file to upload"
-                        onFileInputChange={(_event, file) => {
-                          if (file) {
-                            handleFileUpload(file);
-                          }
-                        }}
-                        browseButtonText="Choose file"
-                        clearButtonText="Clear"
-                      />
-                    </FormGroup>
-                  </GridItem>
-                </Grid>
+                  </FlexItem>
+                  <FlexItem>
+                    <div style={{ maxWidth: 520 }}>
+                      <FormGroup label="Upload File" fieldId="file-upload">
+                        <FileUpload
+                          id="file-upload"
+                          type="dataURL"
+                          value=""
+                          filename=""
+                          filenamePlaceholder="Choose file to upload"
+                          onFileInputChange={(_event, file) => {
+                            if (file) {
+                              handleFileUpload(file);
+                            }
+                          }}
+                          browseButtonText="Choose file"
+                          clearButtonText="Clear"
+                        />
+                      </FormGroup>
+                    </div>
+                  </FlexItem>
+                </Flex>
 
-                {/* Text files list */}
                 {textFiles.length > 0 && (
                   <div style={{ marginTop: "16px" }}>
                     <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
@@ -639,7 +640,6 @@ const CreateBuildPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Uploaded files list */}
                 {uploadedFiles.length > 0 && (
                   <div style={{ marginTop: "16px" }}>
                     <Title headingLevel="h4" size="md" style={{ marginBottom: "12px" }}>
