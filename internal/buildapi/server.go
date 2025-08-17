@@ -1118,7 +1118,7 @@ func getRESTConfigFromRequest(_ *http.Request) (*rest.Config, error) {
 		}
 	}
 	cfgCopy := rest.CopyConfig(cfg)
-	cfgCopy.Timeout = 10 * time.Minute
+	cfgCopy.Timeout = 30 * time.Minute
 	return cfgCopy, nil
 }
 

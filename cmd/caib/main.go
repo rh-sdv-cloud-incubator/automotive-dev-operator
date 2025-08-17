@@ -262,6 +262,15 @@ func runBuild(cmd *cobra.Command, args []string) {
 			userFollowRequested := followLogs
 			var lastPhase, lastMessage string
 			logFollowWarned := false
+
+			logClient := &http.Client{
+				Timeout: 10 * time.Minute,
+				Transport: &http.Transport{
+					ResponseHeaderTimeout: 30 * time.Second,
+					IdleConnTimeout:       2 * time.Minute,
+				},
+			}
+
 			for {
 				select {
 				case <-timeoutCtx.Done():
@@ -272,7 +281,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 						if strings.TrimSpace(authToken) != "" {
 							req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
 						}
-						resp2, err := http.DefaultClient.Do(req)
+						resp2, err := logClient.Do(req)
 						if err == nil && resp2.StatusCode == http.StatusOK {
 							fmt.Println("Streaming logs...")
 							io.Copy(os.Stdout, resp2.Body)
@@ -439,7 +448,16 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 	base := strings.TrimRight(baseURL, "/")
 	urlStr := base + "/v1/builds/" + url.PathEscape(name) + "/artifact"
 
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(30 * time.Minute)
+
+	httpClient := &http.Client{
+		Timeout: 30 * time.Minute,
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 2 * time.Minute,
+			IdleConnTimeout:       5 * time.Minute,
+		},
+	}
+
 	warned := false
 	for {
 		if ctx.Err() != nil || time.Now().After(deadline) {
@@ -449,7 +467,7 @@ func downloadArtifactViaAPI(ctx context.Context, baseURL, name, outDir string) e
 		if strings.TrimSpace(authToken) != "" {
 			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			time.Sleep(3 * time.Second)
 			continue
