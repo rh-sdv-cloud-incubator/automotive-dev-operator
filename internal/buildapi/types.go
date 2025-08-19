@@ -86,6 +86,7 @@ type BuildRequest struct {
 	ExportFormat           ExportFormat `json:"exportFormat"`
 	Mode                   Mode         `json:"mode"`
 	AutomotiveImageBuilder string       `json:"automotiveImageBuilder"`
+	StorageClass           string       `json:"storageClass"`
 	CustomDefs             []string     `json:"customDefs"`
 	AIBExtraArgs           []string     `json:"aibExtraArgs"`
 	AIBOverrideArgs        []string     `json:"aibOverrideArgs"`

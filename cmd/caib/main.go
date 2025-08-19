@@ -34,6 +34,7 @@ var (
 	exportFormat           string
 	mode                   string
 	automotiveImageBuilder string
+	storageClass           string
 	outputDir              string
 	timeout                int
 	waitForBuild           bool
@@ -86,6 +87,7 @@ func main() {
 	buildCmd.Flags().StringVar(&exportFormat, "export-format", "image", "export format (image, qcow2, etc)")
 	buildCmd.Flags().StringVar(&mode, "mode", "image", "build mode")
 	buildCmd.Flags().StringVar(&automotiveImageBuilder, "automotive-image-builder", "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0", "container image for automotive-image-builder")
+	buildCmd.Flags().StringVar(&storageClass, "storage-class", "", "storage class to use for build workspace PVC")
 	buildCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes when waiting for build completion")
 	buildCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for the build to complete")
 	buildCmd.Flags().BoolVarP(&download, "download", "d", false, "automatically download artifacts when build completes")
@@ -185,6 +187,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			ExportFormat:           parsedExportFormat,
 			Mode:                   parsedMode,
 			AutomotiveImageBuilder: automotiveImageBuilder,
+			StorageClass:           storageClass,
 			CustomDefs:             customDefs,
 			AIBExtraArgs:           aibArgsArray,
 			AIBOverrideArgs:        aibOverrideArray,

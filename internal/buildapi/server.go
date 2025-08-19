@@ -494,6 +494,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ExportFormat:           string(req.ExportFormat),
 			Mode:                   string(req.Mode),
 			AutomotiveImageBuilder: req.AutomotiveImageBuilder,
+			StorageClass:           req.StorageClass,
 			ServeArtifact:          req.ServeArtifact,
 			ServeExpiryHours:       serveExpiryHours,
 			ManifestConfigMap:      cfgName,

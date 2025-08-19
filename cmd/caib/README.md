@@ -60,6 +60,7 @@ Common options:
 - `--mode`: Build mode (default: `image`).
 - `--export-format`: `image` (raw) or `qcow2` (default: `image`).
 - `--automotive-image-builder`: Container image for AIB (default: `quay.io/centos-sig-automotive/automotive-image-builder:1.0.0`).
+- `--storage-class`: Storage class to use for build workspace PVC (optional).
 - `--define`: Repeatable `KEY=VALUE` custom definitions passed to AIB.
 - `--aib-args`: Extra arguments passed to AIB (space-separated string).
 - `--wait` (`-w`): Wait for build to complete.
