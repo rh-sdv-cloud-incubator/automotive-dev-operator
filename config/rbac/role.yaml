@@ -23,6 +23,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - pods/exec
   verbs:
   - create
@@ -32,15 +41,6 @@ rules:
   - pods/log
   verbs:
   - get
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - create
-  - get
-  - list
-  - watch
 - apiGroups:
   - automotive.sdv.cloud.redhat.com
   resources:
