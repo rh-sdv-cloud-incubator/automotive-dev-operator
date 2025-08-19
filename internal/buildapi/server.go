@@ -932,14 +932,49 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		}
 	}
 
-	if !isDir {
-		gzFileName := artifactFileName
+	tarGzPath := sourcePath + ".tar.gz"
+	simpleGzPath := sourcePath + ".gz"
+
+	checkTarGzReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"sh", "-c", "test -f \"" + tarGzPath + "\" && echo exists || echo missing"},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+	checkTarGzExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkTarGzReq.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (tar.gz check): %v", err), http.StatusInternalServerError)
+		return
+	}
+	var checkTarGzStdout strings.Builder
+	hasTarGz := false
+	if err := checkTarGzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &checkTarGzStdout, Stderr: io.Discard}); err == nil {
+		hasTarGz = strings.Contains(checkTarGzStdout.String(), "exists")
+	}
+
+	var gzPath string
+	var gzFileName string
+	var artifactType string
+
+	if hasTarGz {
+		gzPath = tarGzPath
+		gzFileName = artifactFileName + ".tar.gz"
+		artifactType = "directory"
+	} else {
+		gzPath = simpleGzPath
+		gzFileName = artifactFileName
 		if !strings.HasSuffix(strings.ToLower(gzFileName), ".gz") {
 			gzFileName = gzFileName + ".gz"
 		}
+		artifactType = "file"
+	}
 
-		gzPath := sourcePath + ".gz"
-
+	if !isDir {
 		sizeReq := clientset.CoreV1().RESTClient().Post().
 			Resource("pods").
 			Name(artifactPod.Name).
@@ -983,8 +1018,11 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
 		w.Header().Set("Content-Length", compressedSize)
-		w.Header().Set("X-AIB-Artifact-Type", "file")
+		w.Header().Set("X-AIB-Artifact-Type", artifactType)
 		w.Header().Set("X-AIB-Compression", "gzip")
+		if hasTarGz {
+			w.Header().Set("X-AIB-Archive-Root", artifactFileName)
+		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
