@@ -160,7 +160,7 @@ func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 				return
 			case "artifact":
 				a.log.Info("artifact requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-				streamArtifact(w, r, name)
+				a.streamArtifact(w, r, name)
 				return
 			case "template":
 				a.log.Info("template requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
@@ -796,7 +796,7 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 // streamArtifact streams the artifact file from the artifact pod to the client over HTTP.
-func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
+func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
 	ctx := r.Context()
 
@@ -882,55 +882,8 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
 		return
 	}
-
+	a.log.Info("Preparing to download artifact", "artifactFileName", artifactFileName)
 	sourcePath := "/workspace/shared/" + artifactFileName
-
-	// First, determine if the artifact is a directory on the fileserver container
-	typeCheckReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(artifactPod.Name).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "fileserver",
-			Command:   []string{"/bin/sh", "-c", "if [ -d '" + sourcePath + "' ]; then echo dir; else echo file; fi"},
-			Stdout:    true,
-			Stderr:    true,
-		}, kscheme.ParameterCodec)
-	typeExec, typeErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, typeCheckReq.URL())
-	if typeErr != nil {
-		http.Error(w, fmt.Sprintf("executor (type check): %v", typeErr), http.StatusInternalServerError)
-		return
-	}
-	var typeStdout, typeStderr strings.Builder
-	if err := typeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &typeStdout, Stderr: &typeStderr}); err != nil {
-		http.Error(w, fmt.Sprintf("type check stream: %v", err), http.StatusInternalServerError)
-		return
-	}
-	isDir := strings.Contains(typeStdout.String(), "dir")
-	if isDir {
-		checkGzReq := clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(artifactPod.Name).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "fileserver",
-				Command:   []string{"/bin/sh", "-c", "test -f '" + sourcePath + ".tar.gz' && echo yes || echo no"},
-				Stdout:    true,
-				Stderr:    true,
-			}, kscheme.ParameterCodec)
-		checkGzExec, gzErr := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkGzReq.URL())
-		if gzErr == nil {
-			var gzStdout, gzStderr strings.Builder
-			_ = checkGzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &gzStdout, Stderr: &gzStderr})
-			if strings.Contains(gzStdout.String(), "yes") {
-				isDir = false
-				artifactFileName = artifactFileName + ".tar.gz"
-				sourcePath = sourcePath + ".tar.gz"
-			}
-		}
-	}
 
 	tarGzPath := sourcePath + ".tar.gz"
 	simpleGzPath := sourcePath + ".gz"
@@ -946,6 +899,7 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
+	a.log.Info("checkTarGzReq", "url", checkTarGzReq.URL())
 	checkTarGzExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkTarGzReq.URL())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("executor (tar.gz check): %v", err), http.StatusInternalServerError)
@@ -974,92 +928,64 @@ func streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
 		artifactType = "file"
 	}
 
-	if !isDir {
-		sizeReq := clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(artifactPod.Name).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "fileserver",
-				Command:   []string{"sh", "-c", "wc -c < \"" + gzPath + "\""},
-				Stdout:    true,
-				Stderr:    true,
-			}, kscheme.ParameterCodec)
-		sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
-		if err != nil {
-			http.Error(w, fmt.Sprintf("executor (size check): %v", err), http.StatusInternalServerError)
-			return
-		}
-		var sizeStdout strings.Builder
-		if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
-			http.Error(w, fmt.Sprintf("size check stream: %v", err), http.StatusInternalServerError)
-			return
-		}
-		compressedSize := strings.TrimSpace(sizeStdout.String())
-
-		streamReq := clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(artifactPod.Name).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "fileserver",
-				Command:   []string{"cat", gzPath},
-				Stdout:    true,
-				Stderr:    true,
-			}, kscheme.ParameterCodec)
-		streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
-		if err != nil {
-			http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/gzip")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
-		w.Header().Set("Content-Length", compressedSize)
-		w.Header().Set("X-AIB-Artifact-Type", artifactType)
-		w.Header().Set("X-AIB-Compression", "gzip")
-		if hasTarGz {
-			w.Header().Set("X-AIB-Archive-Root", artifactFileName)
-		}
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-
-		_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+	if gzPath == "" {
+		http.Error(w, "no compressed artifact found", http.StatusNotFound)
 		return
 	}
 
-	tarFileName := artifactFileName + ".tar.gz"
-	tarCmd := []string{"/bin/sh", "-c", "cd /workspace/shared && tar -czf - '" + artifactFileName + "'"}
-
-	tarReq := clientset.CoreV1().RESTClient().Post().
+	sizeReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(artifactPod.Name).
 		Namespace(namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "fileserver",
-			Command:   tarCmd,
+			Command:   []string{"sh", "-c", "wc -c < \"" + gzPath + "\""},
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
-	tarExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, tarReq.URL())
+	sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (tar): %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("executor (size check): %v", err), http.StatusInternalServerError)
+		return
+	}
+	var sizeStdout strings.Builder
+	if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
+		http.Error(w, fmt.Sprintf("size check stream: %v", err), http.StatusInternalServerError)
+		return
+	}
+	compressedSize := strings.TrimSpace(sizeStdout.String())
+	a.log.Info("Size of artifact", "artifact", gzPath, "size", compressedSize)
+	streamReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"cat", gzPath},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+	streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", tarFileName))
-	w.Header().Set("X-AIB-Artifact-Type", "directory")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
+	w.Header().Set("Content-Length", compressedSize)
+	w.Header().Set("X-AIB-Artifact-Type", artifactType)
 	w.Header().Set("X-AIB-Compression", "gzip")
-	w.Header().Set("X-AIB-Archive-Root", artifactFileName)
+	if hasTarGz {
+		w.Header().Set("X-AIB-Archive-Root", artifactFileName)
+	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	_ = tarExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+
+	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
 }
 
 func copyFileToPod(config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
