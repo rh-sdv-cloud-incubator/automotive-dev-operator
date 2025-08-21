@@ -649,21 +649,52 @@ const BuildListPage: React.FC = () => {
                   </dl>
 
                   {buildDetails.phase === 'Completed' && selectedBuild && (
-                    <ActionGroup style={{ marginTop: '24px' }}>
-                      <Button
-                        variant="secondary"
-                        onClick={() => downloadArtifact(selectedBuild)}
-                        icon={<DownloadIcon />}
+                    <div style={{ marginTop: '24px' }}>
+                      <ActionGroup style={{ marginBottom: '16px' }}>
+                        <Button
+                          variant="secondary"
+                          onClick={() => downloadArtifact(selectedBuild)}
+                          icon={<DownloadIcon />}
+                        >
+                          Download
+                        </Button>
+                      </ActionGroup>
+                      <Alert
+                        variant="info"
+                        title="Direct Download URL"
+                        isInline
+                        isPlain
                       >
-                        Download
-                      </Button>
-                    </ActionGroup>
+                        <p style={{ marginBottom: '8px' }}>
+                          You can also download this artifact directly using the REST API:
+                        </p>
+                        <CodeBlock>
+                          <CodeBlockCode>
+{`GET ${API_BASE ? API_BASE : window.location.origin}/v1/builds/${selectedBuild}/artifact`}
+                          </CodeBlockCode>
+                        </CodeBlock>
+                        <p style={{ marginTop: '8px', marginBottom: '8px' }}>
+                          Example with curl:
+                        </p>
+                        <CodeBlock>
+                          <CodeBlockCode>
+{`TOKEN=$(oc whoami -t)
+curl -H "Authorization: Bearer $TOKEN" \\
+     -o "artifact.gz" \\
+     "${API_BASE ? API_BASE : window.location.origin}/v1/builds/${selectedBuild}/artifact"`}
+                          </CodeBlockCode>
+                        </CodeBlock>
+                        <p style={{ marginTop: '8px', fontSize: '0.875rem', color: 'var(--pf-v5-global--Color--200)' }}>
+                          The artifact will be served as a compressed file (.gz or .tar.gz)
+                        </p>
+                      </Alert>
+                    </div>
                   )}
                 </div>
               ) : null}
             </Tab>
-            <Tab 
-              eventKey={1} 
+            <Tab
+              eventKey={1}
               title={<TabTitleText>Logs</TabTitleText>}
               onSelect={() => {
                 if (selectedBuild && buildDetails && (buildDetails.phase === 'Running' || buildDetails.phase === 'Pending')) {

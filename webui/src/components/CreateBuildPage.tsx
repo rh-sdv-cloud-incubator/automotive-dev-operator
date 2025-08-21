@@ -563,7 +563,7 @@ const CreateBuildPage: React.FC = () => {
                                         onChange={(_event, value) =>
                                           handleInputChange("aibExtraArgs", value)
                                         }
-                                        placeholder="--verbose --debug"
+                                        placeholder=""
                                       />
                                     </FormGroup>
                                   </GridItem>
