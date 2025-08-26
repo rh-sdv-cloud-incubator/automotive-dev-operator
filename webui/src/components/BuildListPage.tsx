@@ -162,6 +162,7 @@ const BuildListPage: React.FC = () => {
   };
 
   const API_BASE = (window as any).__API_BASE || '';
+  const BUILD_API_BASE = API_BASE.replace('ado-webui-', 'ado-build-api-');
   const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const resp = await fetch(input, {
       credentials: 'include',
@@ -346,7 +347,7 @@ const BuildListPage: React.FC = () => {
 
   const downloadArtifact = (buildName: string) => {
     try {
-      const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
+      const url = `${BUILD_API_BASE || API_BASE}/v1/builds/${buildName}/artifact`;
       window.location.href = url;
     } catch (err) {
       setError(`Error initiating download: ${err}`);
@@ -670,7 +671,7 @@ const BuildListPage: React.FC = () => {
                         </p>
                         <CodeBlock>
                           <CodeBlockCode>
-{`GET ${API_BASE ? API_BASE : window.location.origin}/v1/builds/${selectedBuild}/artifact`}
+{`GET ${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifact`}
                           </CodeBlockCode>
                         </CodeBlock>
                         <p style={{ marginTop: '8px', marginBottom: '8px' }}>
@@ -681,7 +682,7 @@ const BuildListPage: React.FC = () => {
 {`TOKEN=$(oc whoami -t)
 curl -H "Authorization: Bearer $TOKEN" \\
      -o "artifact.gz" \\
-     "${API_BASE ? API_BASE : window.location.origin}/v1/builds/${selectedBuild}/artifact"`}
+     "${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifact"`}
                           </CodeBlockCode>
                         </CodeBlock>
                         <p style={{ marginTop: '8px', fontSize: '0.875rem', color: 'var(--pf-v5-global--Color--200)' }}>
