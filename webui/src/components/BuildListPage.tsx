@@ -162,7 +162,7 @@ const BuildListPage: React.FC = () => {
   };
 
   const API_BASE = (window as any).__API_BASE || '';
-  const BUILD_API_BASE = API_BASE.replace('ado-webui-', 'ado-build-api-');
+  const BUILD_API_BASE = API_BASE || `https://${window.location.host.replace('ado-webui-', 'ado-build-api-')}`;
   const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const resp = await fetch(input, {
       credentials: 'include',
