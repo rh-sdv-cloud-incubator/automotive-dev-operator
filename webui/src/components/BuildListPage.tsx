@@ -87,6 +87,7 @@ const BuildListPage: React.FC = () => {
   const [nowTs, setNowTs] = useState<number>(Date.now());
   const liveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(null);
+  const downloadInProgressRef = useRef<string | null>(null);
 
   const scrollLogsToBottom = () => {
     requestAnimationFrame(() => {
@@ -347,19 +348,23 @@ const BuildListPage: React.FC = () => {
   };
 
   const downloadArtifact = (buildName: string) => {
+    if (downloadInProgressRef.current === buildName) return;
     if (downloadingArtifact) return;
 
     try {
+      downloadInProgressRef.current = buildName;
       setDownloadingArtifact(buildName);
       setError(null);
       const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
       window.location.href = url;
       setTimeout(() => {
         setDownloadingArtifact(null);
-      }, 2000);
+        downloadInProgressRef.current = null;
+      }, 1500);
     } catch (err) {
       setError(`Error initiating download: ${err}`);
       setDownloadingArtifact(null);
+      downloadInProgressRef.current = null;
     }
   };
 
