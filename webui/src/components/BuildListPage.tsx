@@ -345,12 +345,36 @@ const BuildListPage: React.FC = () => {
     }
   };
 
-  const downloadArtifact = (buildName: string) => {
+  const downloadArtifact = async (buildName: string) => {
     try {
-      const url = `${BUILD_API_BASE || API_BASE}/v1/builds/${buildName}/artifact`;
-      window.location.href = url;
+      const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
+      const response = await authFetch(url);
+
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+      }
+
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = `${buildName}.artifact`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?([^"]*)"?/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1];
+        }
+      }
+
+      // Create blob and download link
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(downloadUrl);
     } catch (err) {
-      setError(`Error initiating download: ${err}`);
+      setError(`Error downloading artifact: ${err}`);
     }
   };
 

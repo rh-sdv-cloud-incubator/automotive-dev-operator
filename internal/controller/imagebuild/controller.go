@@ -209,7 +209,7 @@ func (r *ImageBuildReconciler) handleCompletedState(ctx context.Context, imageBu
 		fresh.Status.ArtifactURL = ""
 		fresh.Status.ArtifactFileName = ""
 		fresh.Status.ArtifactPath = ""
-		fresh.Status.Message = "Artifact serving expired and resources cleaned up"
+		fresh.Status.Message = "Build expired"
 		if err := r.Status().Patch(ctx, fresh, patch); err != nil {
 			log.Error(err, "failed to update ImageBuild status after expiry cleanup")
 		}
