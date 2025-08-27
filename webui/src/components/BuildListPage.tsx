@@ -86,6 +86,7 @@ const BuildListPage: React.FC = () => {
   const INACTIVITY_RESTART_SEC = 15;
   const [nowTs, setNowTs] = useState<number>(Date.now());
   const liveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(null);
 
   const scrollLogsToBottom = () => {
     requestAnimationFrame(() => {
@@ -345,36 +346,20 @@ const BuildListPage: React.FC = () => {
     }
   };
 
-  const downloadArtifact = async (buildName: string) => {
+  const downloadArtifact = (buildName: string) => {
+    if (downloadingArtifact) return;
+
     try {
+      setDownloadingArtifact(buildName);
+      setError(null);
       const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
-      const response = await authFetch(url);
-
-      if (!response.ok) {
-        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-      }
-
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `${buildName}.artifact`;
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="?([^"]*)"?/);
-        if (filenameMatch && filenameMatch[1]) {
-          filename = filenameMatch[1];
-        }
-      }
-
-      // Create blob and download link
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(downloadUrl);
+      window.location.href = url;
+      setTimeout(() => {
+        setDownloadingArtifact(null);
+      }, 2000);
     } catch (err) {
-      setError(`Error downloading artifact: ${err}`);
+      setError(`Error initiating download: ${err}`);
+      setDownloadingArtifact(null);
     }
   };
 
@@ -578,9 +563,11 @@ const BuildListPage: React.FC = () => {
                           variant="secondary"
                           onClick={() => downloadArtifact(build.name)}
                           icon={<DownloadIcon />}
+                          isLoading={downloadingArtifact === build.name}
+                          isDisabled={!!downloadingArtifact}
                           style={{ marginLeft: '8px' }}
                         >
-                          Download
+                          {downloadingArtifact === build.name ? 'Downloading...' : 'Download'}
                         </Button>
                       )}
                     </Td>
@@ -680,8 +667,10 @@ const BuildListPage: React.FC = () => {
                           variant="secondary"
                           onClick={() => downloadArtifact(selectedBuild)}
                           icon={<DownloadIcon />}
+                          isLoading={downloadingArtifact === selectedBuild}
+                          isDisabled={!!downloadingArtifact}
                         >
-                          Download
+                          {downloadingArtifact === selectedBuild ? 'Downloading...' : 'Download'}
                         </Button>
                       </ActionGroup>
                       <Alert
