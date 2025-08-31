@@ -236,8 +236,20 @@ if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
   echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
   tar -C $(workspaces.shared-workspace.path) -czf $(workspaces.shared-workspace.path)/${exportFile}.tar.gz ${exportFile} || echo "Failed to create ${exportFile}.tar.gz"
   echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
+  if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" ]; then
+    echo "Removing uncompressed directory ${exportFile}"
+    rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
+    pushd $(workspaces.shared-workspace.path)
+    ln -sf ${exportFile}.tar.gz disk.img
+    popd
+  fi
 elif [ -f "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
   echo "Creating compressed file ${exportFile}.gz in shared workspace..."
-  gzip -c $(workspaces.shared-workspace.path)/${exportFile} > $(workspaces.shared-workspace.path)/${exportFile}.gz || echo "Failed to create ${exportFile}.gz"
+  gzip -f $(workspaces.shared-workspace.path)/${exportFile} || echo "Failed to create ${exportFile}.gz"
   echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.gz || true
+  if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.gz" ]; then
+    pushd $(workspaces.shared-workspace.path)
+    ln -sf ${exportFile}.gz disk.img
+    popd
+  fi
 fi
