@@ -28,6 +28,7 @@ import {
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { CubesIcon, DownloadIcon, EyeIcon, RedoIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
+import { authFetch, API_BASE, BUILD_API_BASE } from '../utils/auth';
 
 interface BuildItem {
   name: string;
@@ -116,7 +117,6 @@ const BuildListPage: React.FC = () => {
     };
   }, []);
 
-  // Live duration ticker while any build is running
   useEffect(() => {
     const anyRunning = builds.some(b => b.phase && b.phase.toLowerCase() === 'building');
     if (anyRunning && !liveTimerRef.current) {
@@ -161,23 +161,6 @@ const BuildListPage: React.FC = () => {
       clearInterval(watchdogIntervalRef.current);
       watchdogIntervalRef.current = null;
     }
-  };
-
-  const API_BASE = (window as any).__API_BASE || '';
-  const BUILD_API_BASE = API_BASE || `https://${window.location.host.replace('ado-webui-', 'ado-build-api-')}`;
-  const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const resp = await fetch(input, {
-      credentials: 'include',
-      cache: 'no-store',
-      keepalive: true,
-      ...init,
-    });
-    if (resp.status === 401 || resp.status === 403) {
-      const rd = encodeURIComponent(window.location.href);
-      window.location.href = `${API_BASE}/oauth/start?rd=${rd}`;
-      throw new Error('Redirecting to login');
-    }
-    return resp;
   };
 
   const fetchBuilds = async () => {

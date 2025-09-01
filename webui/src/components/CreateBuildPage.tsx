@@ -27,6 +27,7 @@ import {
 } from "@patternfly/react-core";
 import { PlusCircleIcon, TrashIcon, InfoCircleIcon } from "@patternfly/react-icons";
 import { useLocation, useNavigate } from "react-router-dom";
+import { authFetch, API_BASE } from "../utils/auth";
 
 interface TextFile {
   id: string;
@@ -234,10 +235,6 @@ const CreateBuildPage: React.FC = () => {
     setUploadedFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
-  const API_BASE = (window as any).__API_BASE || "";
-  const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    return fetch(input, { credentials: "include", ...init });
-  };
   const uploadFiles = async (buildName: string) => {
     if (textFiles.length === 0 && uploadedFiles.length === 0) return;
 
