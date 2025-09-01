@@ -350,8 +350,16 @@ webui-dev: ## Start webui in development mode
 
 .PHONY: webui-docker-build
 webui-docker-build: ## Build webui docker image
-	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --load -t $(IMAGE_TAG_BASE)-webui:latest webui/
+	$(CONTAINER_TOOL) build -t $(IMAGE_TAG_BASE)-webui:latest -f webui/Dockerfile .
+
+.PHONY: webui-docker-build-multiarch
+webui-docker-build-multiarch: ## Build webui docker image for multiple architectures
+	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --load -t $(IMAGE_TAG_BASE)-webui:latest -f webui/Dockerfile .
 
 .PHONY: webui-docker-push
 webui-docker-push: ## Push webui docker image
 	$(CONTAINER_TOOL) push $(IMAGE_TAG_BASE)-webui:latest
+
+.PHONY: webui-docker-push-multiarch
+webui-docker-push-multiarch: ## Build and push webui docker image for multiple architectures
+	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --push -t $(IMAGE_TAG_BASE)-webui:latest -f webui/Dockerfile .

@@ -122,7 +122,7 @@ jobs:
             - name: Build and push webui (ARM64)
               uses: docker/build-push-action@v5
               with:
-                  context: ./webui
+                  context: .
                   file: ./webui/Dockerfile
                   platforms: linux/arm64
                   push: true
@@ -151,7 +151,7 @@ jobs:
             - name: Build and push webui (AMD64)
               uses: docker/build-push-action@v5
               with:
-                  context: ./webui
+                  context: .
                   file: ./webui/Dockerfile
                   platforms: linux/amd64
                   push: true
