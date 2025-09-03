@@ -67,6 +67,11 @@ type ImageBuildSpec struct {
 
 	// ExposeRoute indicates whether to expose the a route for the artifacts
 	ExposeRoute bool `json:"exposeRoute,omitempty"`
+
+	// EnvSecretRef is the name of the secret containing environment variables for the build
+	// These environment variables will be available during the build process and can be used
+	// for private registry authentication (e.g., REGISTRY_USERNAME, REGISTRY_PASSWORD, REGISTRY_AUTH_FILE)
+	EnvSecretRef string `json:"envSecretRef,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing

@@ -91,6 +91,7 @@ type BuildRequest struct {
 	AIBExtraArgs           []string     `json:"aibExtraArgs"`
 	AIBOverrideArgs        []string     `json:"aibOverrideArgs"`
 	ServeArtifact          bool         `json:"serveArtifact"`
+	EnvSecretRef           string       `json:"envSecretRef"`
 }
 
 // BuildResponse is returned by POST and GET build operations

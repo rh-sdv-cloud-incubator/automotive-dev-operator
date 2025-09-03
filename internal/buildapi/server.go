@@ -69,7 +69,7 @@ func (a *APIServer) Start(ctx context.Context) error {
 	<-ctx.Done()
 	a.log.Info("shutting down build-api server...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	if err := a.server.Shutdown(shutdownCtx); err != nil {
@@ -237,6 +237,11 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
 	_, _ = w.Write([]byte("Waiting for logs...\n"))
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -285,7 +290,6 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 			}
 
 			if !hadStream {
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -296,11 +300,42 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			io.Copy(w, stream)
-			stream.Close()
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+			// Stream with proper error handling and context cancellation
+			func() {
+				defer stream.Close()
+
+				// Create a buffer for chunked reading
+				buf := make([]byte, 4096)
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
+					n, err := stream.Read(buf)
+					if n > 0 {
+						if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+							return
+						}
+						if f, ok := w.(http.Flusher); ok {
+							f.Flush()
+						}
+					}
+
+					if err != nil {
+						if err != io.EOF {
+							var errMsg []byte
+							errMsg = fmt.Appendf(errMsg, "\n[Stream error: %v]\n", err)
+							_, _ = w.Write(errMsg)
+							if f, ok := w.(http.Flusher); ok {
+								f.Flush()
+							}
+						}
+						return
+					}
+				}
+			}()
 
 			streamed[cName] = true
 		}
@@ -329,6 +364,11 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 	if !hadStream {
 		http.Error(w, "logs unavailable: "+strings.Join(lastErrs, "; "), http.StatusServiceUnavailable)
 		return
+	}
+
+	_, _ = w.Write([]byte("\n[Log streaming completed]\n"))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 }
 
@@ -499,6 +539,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ServeExpiryHours:       serveExpiryHours,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       needsUpload,
+			EnvSecretRef:           req.EnvSecretRef,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {

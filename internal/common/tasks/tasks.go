@@ -100,7 +100,7 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 }
 
 // GenerateBuildAutomotiveImageTask creates a Tekton Task for building automotive images
-func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev1.BuildConfig) *tektonv1.Task {
+func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev1.BuildConfig, envSecretRef string) *tektonv1.Task {
 	task := &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
@@ -193,7 +193,8 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 							Add: []corev1.Capability{},
 						},
 					},
-					Script: BuildImageScript,
+					Script:  BuildImageScript,
+					EnvFrom: buildEnvFrom(envSecretRef),
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "build-dir",
@@ -547,4 +548,20 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 	}
 
 	return pipeline
+}
+
+func buildEnvFrom(envSecretRef string) []corev1.EnvFromSource {
+	if envSecretRef == "" {
+		return nil
+	}
+
+	return []corev1.EnvFromSource{
+		{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: envSecretRef,
+				},
+			},
+		},
+	}
 }

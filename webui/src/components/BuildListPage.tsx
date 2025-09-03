@@ -295,6 +295,19 @@ const BuildListPage: React.FC = () => {
       if (err?.name === 'AbortError' || String(err).includes('AbortError')) {
         return;
       }
+
+      const errorMessage = String(err);
+      if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
+          errorMessage.includes('net::ERR_INCOMPLETE_CHUNKED_ENCODING')) {
+        console.warn('Chunked encoding incomplete, retrying log stream...', err);
+        setTimeout(() => {
+          if (selectedBuild) {
+            fetchLogs(selectedBuild, true);
+          }
+        }, 1000);
+        return;
+      }
+
       // Transient network error: schedule a silent retry
       setTimeout(() => {
         if (selectedBuild) {

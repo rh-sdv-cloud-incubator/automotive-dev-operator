@@ -42,6 +42,14 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - automotive.sdv.cloud.redhat.com
   resources:
   - automotivedevs

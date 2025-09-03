@@ -131,7 +131,7 @@ func (r *AutomotiveDevReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func generateTektonTasks(namespace string, buildConfig *automotivev1.BuildConfig) []*tektonv1.Task {
 	return []*tektonv1.Task{
-		tasks.GenerateBuildAutomotiveImageTask(namespace, buildConfig),
+		tasks.GenerateBuildAutomotiveImageTask(namespace, buildConfig, ""),
 		tasks.GeneratePushArtifactRegistryTask(namespace),
 	}
 }

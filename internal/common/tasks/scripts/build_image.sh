@@ -28,6 +28,49 @@ EOF
 export REGISTRY_AUTH_FILE=$HOME/.authjson
 export CONTAINERS_REGISTRIES_CONF="/etc/containers/registries.conf"
 
+if [ -n "$REGISTRY_AUTH_FILE_CONTENT" ]; then
+    echo "Using provided registry auth file content"
+    echo "$REGISTRY_AUTH_FILE_CONTENT" > $HOME/.custom_authjson
+    export REGISTRY_AUTH_FILE=$HOME/.custom_authjson
+elif [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ] && [ -n "$REGISTRY_URL" ]; then
+    echo "Creating registry auth from username/password for $REGISTRY_URL"
+    mkdir -p $HOME/.config
+    AUTH_STRING=$(echo -n "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" | base64 -w0)
+    cat > $HOME/.custom_authjson <<EOF
+{
+  "auths": {
+    "$REGISTRY_URL": {
+      "auth": "$AUTH_STRING"
+    },
+    "$REGISTRY": {
+      "auth": "$(echo -n "serviceaccount:$TOKEN" | base64 -w0)"
+    }
+  }
+}
+EOF
+    export REGISTRY_AUTH_FILE=$HOME/.custom_authjson
+elif [ -n "$REGISTRY_TOKEN" ] && [ -n "$REGISTRY_URL" ]; then
+    echo "Creating registry auth from token for $REGISTRY_URL"
+    mkdir -p $HOME/.config
+    cat > $HOME/.custom_authjson <<EOF
+{
+  "auths": {
+    "$REGISTRY_URL": {
+      "auth": "$(echo -n "token:$REGISTRY_TOKEN" | base64 -w0)"
+    },
+    "$REGISTRY": {
+      "auth": "$(echo -n "serviceaccount:$TOKEN" | base64 -w0)"
+    }
+  }
+}
+EOF
+    export REGISTRY_AUTH_FILE=$HOME/.custom_authjson
+fi
+
+if [ -n "$BUILDAH_REGISTRY_AUTH_FILE" ]; then
+    export BUILDAH_REGISTRY_AUTH_FILE="$REGISTRY_AUTH_FILE"
+fi
+
 osbuildPath="/usr/bin/osbuild"
 storePath="/_build"
 runTmp="/run/osbuild/"

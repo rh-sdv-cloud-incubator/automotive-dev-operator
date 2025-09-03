@@ -54,6 +54,7 @@ interface BuildFormData {
   aibExtraArgs: string;
   aibOverrideArgs: string;
   serveArtifact: boolean;
+  envSecretRef: string;
 }
 
 interface BuildTemplateResponse {
@@ -70,7 +71,71 @@ interface BuildTemplateResponse {
   aibOverrideArgs?: string[];
   serveArtifact: boolean;
   sourceFiles?: string[];
+  envSecretRef?: string;
 }
+
+// Predefined options from automotive-image-builder CLI
+const DISTRO_OPTIONS = [
+  { value: "autosd", label: "autosd - Alias of 'autosd9'" },
+  { value: "autosd10", label: "autosd10 - AutoSD 9 - based on nightly autosd compose" },
+  { value: "autosd10-latest-sig", label: "autosd10-latest-sig - AutoSD 10 - latest cs10 and autosd repos, plus the automotive sig community packages" },
+  { value: "autosd10-sig", label: "autosd10-sig - AutoSD 9 - based on nightly autosd compose, plus the automotive sig community packages" },
+  { value: "autosd9", label: "autosd9 - AutoSD 9 - based on nightly autosd compose" },
+  { value: "autosd9-latest-sig", label: "autosd9-latest-sig - AutoSD 9 - latest cs9 and autosd repos, plus the automotive sig community packages" },
+  { value: "autosd9-sig", label: "autosd9-sig - AutoSD 9 - based on nightly autosd compose, plus the automotive sig community packages" },
+  { value: "cs9", label: "cs9 - Alias of 'autosd9-latest-sig'" },
+  { value: "eln", label: "eln - Fedora ELN" },
+  { value: "f40", label: "f40 - Fedora 40" },
+  { value: "f41", label: "f41 - Fedora 41" },
+  { value: "rhivos", label: "rhivos - Alias of 'rhivos1'" },
+  { value: "rhivos1", label: "rhivos1 - RHIVOS 1" },
+];
+
+const TARGET_OPTIONS = [
+  { value: "_abootqemu", label: "_abootqemu - Implementation of abootqemu.ipp.yml but loaded after derived target" },
+  { value: "_abootqemukvm", label: "_abootqemukvm - Implementation of abootqemukvm.ipp.yml but loaded after derived target" },
+  { value: "_ridesx4_r3", label: "_ridesx4_r3 - Implementation of ridesx4_r3.ipp.yml but loaded after derived target" },
+  { value: "_ridesx4_scmi", label: "_ridesx4_scmi - Implementation of ridesx4_scmi.ipp.yml, but loaded after derived target" },
+  { value: "abootqemu", label: "abootqemu - This is a qemu target similar to the regular \"qemu\" target, but using an android boot partition instead of grub." },
+  { value: "abootqemukvm", label: "abootqemukvm - This is a qemu target similar to the \"abootqemu\", but using a dtb that enables kvm." },
+  { value: "acrn", label: "acrn" },
+  { value: "am62sk", label: "am62sk - Target for the TI SK-AM62 Evaluation Board" },
+  { value: "am69sk", label: "am69sk - Target for the TI SK-AM69 Evaluation Board" },
+  { value: "aws", label: "aws" },
+  { value: "azure", label: "azure - Target for Azure images" },
+  { value: "beagleplay", label: "beagleplay - Target for the TI BeaglePlay Board" },
+  { value: "ccimx93dvk", label: "ccimx93dvk" },
+  { value: "imx8qxp_mek", label: "imx8qxp_mek - Target for the Multisensory Enablement Kit i.MX 8QuadXPlus MEK CPU Board" },
+  { value: "j784s4evm", label: "j784s4evm - Target for the TI J784S4XEVM Evaluation Board" },
+  { value: "pc", label: "pc" },
+  { value: "qdrive3", label: "qdrive3" },
+  { value: "qemu", label: "qemu - Target for general virtualized images (typically for qemu)" },
+  { value: "rcar_s4", label: "rcar_s4 - Target for Renesas R-Car S4 with stock functionality" },
+  { value: "rcar_s4_can", label: "rcar_s4_can - Target for Renesas R-Car S4 with CAN bus enablement, requires CAN unlock app running on G4MH cores to boot" },
+  { value: "ridesx4", label: "ridesx4 - A target for the QC RIDESX4 board." },
+  { value: "ridesx4_r3", label: "ridesx4_r3 - A target for the QC RIDESX4 board, Rev 3." },
+  { value: "ridesx4_scmi", label: "ridesx4_scmi - A target for the QC RIDESX4 board flashed with recent firmware using SCMI for drivers resources." },
+  { value: "rpi4", label: "rpi4 - Target for the Raspberry Pi 4" },
+  { value: "s32g_vnp_rdb3", label: "s32g_vnp_rdb3 - Target for the NXP S32G3 Vehicle Networking Reference Design Board" },
+  { value: "tda4vm_sk", label: "tda4vm_sk - Target for the TI SK-TDA4VM Evaluation Board" },
+];
+
+const EXPORT_FORMAT_OPTIONS = [
+  { value: "aboot", label: "aboot - Aboot image" },
+  { value: "aboot.simg", label: "aboot.simg - Aboot image in simg format" },
+  { value: "bootc", label: "bootc - Bootc image in local store" },
+  { value: "bootc-archive", label: "bootc-archive - Bootc OCI image archive" },
+  { value: "container", label: "container - Container image" },
+  { value: "ext4", label: "ext4 - Ext4 filesystem image without partitions" },
+  { value: "ext4.simg", label: "ext4.simg - Ext4 filesystem partition in simg format" },
+  { value: "image", label: "image - Raw disk image" },
+  { value: "ostree-commit", label: "ostree-commit - OSTree repo containing a commit" },
+  { value: "qcow2", label: "qcow2 - Disk image in qcow2 format" },
+  { value: "rootfs", label: "rootfs - Directory with image rootfs files" },
+  { value: "rpmlist", label: "rpmlist - List of rpms that are in the image" },
+  { value: "simg", label: "simg - Partitioned image in simg format" },
+  { value: "tar", label: "tar - Tar archive with files from rootfs" },
+];
 
 const PopoverLabel: React.FC<{ label: string; popoverContent: string; isRequired?: boolean }> = ({ label, popoverContent, isRequired }) => (
   <span>
@@ -115,6 +180,7 @@ const CreateBuildPage: React.FC = () => {
     aibExtraArgs: "",
     aibOverrideArgs: "",
     serveArtifact: true,
+    envSecretRef: "",
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -161,6 +227,7 @@ const CreateBuildPage: React.FC = () => {
       aibExtraArgs: (t?.aibExtraArgs ?? []).join(" "),
       aibOverrideArgs: (t?.aibOverrideArgs ?? []).join(" "),
       serveArtifact: t?.serveArtifact ?? prev.serveArtifact,
+      envSecretRef: t?.envSecretRef ?? prev.envSecretRef,
     }));
 
     if (t.sourceFiles && t.sourceFiles.length > 0) {
@@ -316,6 +383,7 @@ const CreateBuildPage: React.FC = () => {
           ? formData.aibOverrideArgs.split(" ").filter((arg) => arg.trim())
           : [],
         serveArtifact: formData.serveArtifact,
+        envSecretRef: formData.envSecretRef,
       };
 
       const response = await authFetch(`${API_BASE}/v1/builds`, {
@@ -352,6 +420,7 @@ const CreateBuildPage: React.FC = () => {
           aibExtraArgs: "",
           aibOverrideArgs: "",
           serveArtifact: true,
+          envSecretRef: "",
         });
         setTextFiles([]);
         setUploadedFiles([]);
@@ -465,8 +534,14 @@ const CreateBuildPage: React.FC = () => {
                                 onChange={(_event, value) =>
                                   handleInputChange("distro", value)
                                 }
-                                placeholder="autosd"
+                                placeholder="Select or type a distribution..."
+                                list="distro-options"
                               />
+                              <datalist id="distro-options">
+                                {DISTRO_OPTIONS.map((option, index) => (
+                                  <option key={index} value={option.value} title={option.label.split(' - ')[1]} />
+                                ))}
+                              </datalist>
                             </FormGroup>
                           </GridItem>
 
@@ -478,8 +553,14 @@ const CreateBuildPage: React.FC = () => {
                                 onChange={(_event, value) =>
                                   handleInputChange("target", value)
                                 }
-                                placeholder="qemu"
+                                placeholder="Select or type a target platform..."
+                                list="target-options"
                               />
+                              <datalist id="target-options">
+                                {TARGET_OPTIONS.map((option, index) => (
+                                  <option key={index} value={option.value} title={option.label.split(' - ')[1]} />
+                                ))}
+                              </datalist>
                             </FormGroup>
                           </GridItem>
 
@@ -505,8 +586,14 @@ const CreateBuildPage: React.FC = () => {
                                 onChange={(_event, value) =>
                                   handleInputChange("exportFormat", value)
                                 }
-                                placeholder="image"
+                                placeholder="Select or type an export format..."
+                                list="export-format-options"
                               />
+                              <datalist id="export-format-options">
+                                {EXPORT_FORMAT_OPTIONS.map((option, index) => (
+                                  <option key={index} value={option.value} title={option.label.split(' - ')[1]} />
+                                ))}
+                              </datalist>
                             </FormGroup>
                           </GridItem>
 
@@ -538,7 +625,6 @@ const CreateBuildPage: React.FC = () => {
                               />
                             </FormGroup>
                           </GridItem>
-                          
                           <GridItem span={12}>
                             <ExpandableSection
                               toggleText="Advanced Build Options"
@@ -577,6 +663,22 @@ const CreateBuildPage: React.FC = () => {
                                           handleInputChange("aibOverrideArgs", value)
                                         }
                                         placeholder="Complete override of AIB arguments"
+                                      />
+                                    </FormGroup>
+                                  </GridItem>
+
+                                  <GridItem span={12}>
+                                    <FormGroup
+                                      label={<PopoverLabel label="Environment Secret Reference" popoverContent="Name of a Kubernetes secret containing environment variables for private registry authentication (e.g., REGISTRY_USERNAME, REGISTRY_PASSWORD, REGISTRY_URL)" />}
+                                      fieldId="envSecretRef"
+                                    >
+                                      <TextInput
+                                        id="envSecretRef"
+                                        value={formData.envSecretRef}
+                                        onChange={(_event, value) =>
+                                          handleInputChange("envSecretRef", value)
+                                        }
+                                        placeholder="my-registry-secret"
                                       />
                                     </FormGroup>
                                   </GridItem>
@@ -841,7 +943,7 @@ const CreateBuildPage: React.FC = () => {
                               !formData.name 
                                 ? "Build name required"
                                 : !formData.manifest && formData.name
-                                  ? "Manifest content required" 
+                                  ? "Manifest content required"
                                   : "Architecture required"
                             }
                             isInline
