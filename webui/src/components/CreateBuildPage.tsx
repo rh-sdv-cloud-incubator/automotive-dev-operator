@@ -74,7 +74,16 @@ interface BuildTemplateResponse {
   envSecretRef?: string;
 }
 
-// Predefined options from automotive-image-builder CLI
+const BUILD_MODE_OPTIONS = [
+  { value: "image", label: "image" },
+  { value: "package", label: "package" },
+];
+
+const ARCHITECTURE_OPTIONS = [
+  { value: "arm64", label: "arm64 (aarch64)" },
+  { value: "amd64", label: "amd64 (x86_64)" },
+];
+
 const DISTRO_OPTIONS = [
   { value: "autosd", label: "autosd - Alias of 'autosd9'" },
   { value: "autosd10", label: "autosd10 - AutoSD 9 - based on nightly autosd compose" },
@@ -170,11 +179,11 @@ const CreateBuildPage: React.FC = () => {
     name: "",
     manifest: "",
     manifestFileName: "manifest.aib.yml",
-    distro: "autosd",
-    target: "qemu",
-    architecture: "arm64",
-    exportFormat: "image",
-    mode: "image",
+    distro: "",
+    target: "",
+    architecture: "",
+    exportFormat: "",
+    mode: "",
     automotiveImageBuilder:
       "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0",
     aibExtraArgs: "",
@@ -572,9 +581,15 @@ const CreateBuildPage: React.FC = () => {
                                 onChange={(_event, value) =>
                                   handleInputChange("architecture", value)
                                 }
-                                placeholder="arm64"
+                                placeholder="Select or type an architecture..."
+                                list="architecture-options"
                                 isRequired
                               />
+                              <datalist id="architecture-options">
+                                {ARCHITECTURE_OPTIONS.map((option, index) => (
+                                  <option key={index} value={option.value} title={option.label.split(' - ')[1]} />
+                                ))}
+                              </datalist>
                             </FormGroup>
                           </GridItem>
 
@@ -605,8 +620,14 @@ const CreateBuildPage: React.FC = () => {
                                 onChange={(_event, value) =>
                                   handleInputChange("mode", value)
                                 }
-                                placeholder="image"
+                                placeholder="Select or type a build mode..."
+                                list="mode-options"
                               />
+                              <datalist id="mode-options">
+                                {BUILD_MODE_OPTIONS.map((option, index) => (
+                                  <option key={index} value={option.value} />
+                                ))}
+                              </datalist>
                             </FormGroup>
                           </GridItem>
 
@@ -678,7 +699,6 @@ const CreateBuildPage: React.FC = () => {
                                         onChange={(_event, value) =>
                                           handleInputChange("envSecretRef", value)
                                         }
-                                        placeholder="my-registry-secret"
                                       />
                                     </FormGroup>
                                   </GridItem>
