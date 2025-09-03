@@ -390,6 +390,60 @@ func splitPath(p string) []string {
 	return parts
 }
 
+func createRegistrySecret(ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *RegistryCredentials) (string, error) {
+	if creds == nil || !creds.Enabled {
+		return "", nil
+	}
+
+	secretName := fmt.Sprintf("%s-registry-auth", buildName)
+	secretData := make(map[string][]byte)
+
+	switch creds.AuthType {
+	case "username-password":
+		if creds.RegistryURL == "" || creds.Username == "" || creds.Password == "" {
+			return "", fmt.Errorf("registry URL, username, and password are required for username-password authentication")
+		}
+		secretData["REGISTRY_URL"] = []byte(creds.RegistryURL)
+		secretData["REGISTRY_USERNAME"] = []byte(creds.Username)
+		secretData["REGISTRY_PASSWORD"] = []byte(creds.Password)
+	case "token":
+		if creds.RegistryURL == "" || creds.Token == "" {
+			return "", fmt.Errorf("registry URL and token are required for token authentication")
+		}
+		secretData["REGISTRY_URL"] = []byte(creds.RegistryURL)
+		secretData["REGISTRY_TOKEN"] = []byte(creds.Token)
+	case "docker-config":
+		if creds.DockerConfig == "" {
+			return "", fmt.Errorf("docker config is required for docker-config authentication")
+		}
+		secretData["REGISTRY_AUTH_FILE_CONTENT"] = []byte(creds.DockerConfig)
+	default:
+		return "", fmt.Errorf("unsupported authentication type: %s", creds.AuthType)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":                  "build-api",
+				"app.kubernetes.io/part-of":                     "automotive-dev",
+				"app.kubernetes.io/created-by":                  "automotive-dev-build-api",
+				"automotive.sdv.cloud.redhat.com/resource-type": "registry-auth",
+				"automotive.sdv.cloud.redhat.com/build-name":    buildName,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: secretData,
+	}
+
+	if err := k8sClient.Create(ctx, secret); err != nil {
+		return "", fmt.Errorf("failed to create registry secret: %w", err)
+	}
+
+	return secretName, nil
+}
+
 func createBuild(w http.ResponseWriter, r *http.Request) {
 	var req BuildRequest
 	dec := json.NewDecoder(r.Body)
@@ -518,6 +572,16 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var envSecretRef string
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
+		secretName, err := createRegistrySecret(ctx, k8sClient, namespace, req.Name, req.RegistryCredentials)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("error creating registry secret: %v", err), http.StatusInternalServerError)
+			return
+		}
+		envSecretRef = secretName
+	}
+
 	imageBuild := &automotivev1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      req.Name,
@@ -539,7 +603,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ServeExpiryHours:       serveExpiryHours,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       needsUpload,
-			EnvSecretRef:           req.EnvSecretRef,
+			EnvSecretRef:           envSecretRef,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -549,6 +613,12 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 
 	if err := setOwnerRef(ctx, k8sClient, namespace, cfgName, imageBuild); err != nil {
 		// best-effort
+	}
+
+	if envSecretRef != "" {
+		if err := setOwnerRef(ctx, k8sClient, namespace, envSecretRef, imageBuild); err != nil {
+			// best-effort
+		}
 	}
 
 	writeJSON(w, http.StatusAccepted, BuildResponse{

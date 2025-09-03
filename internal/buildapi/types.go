@@ -77,21 +77,31 @@ func ParseMode(s string) (Mode, error) {
 
 // BuildRequest is the payload to create a build via the REST API
 type BuildRequest struct {
-	Name                   string       `json:"name"`
-	Manifest               string       `json:"manifest"`
-	ManifestFileName       string       `json:"manifestFileName"`
-	Distro                 Distro       `json:"distro"`
-	Target                 Target       `json:"target"`
-	Architecture           Architecture `json:"architecture"`
-	ExportFormat           ExportFormat `json:"exportFormat"`
-	Mode                   Mode         `json:"mode"`
-	AutomotiveImageBuilder string       `json:"automotiveImageBuilder"`
-	StorageClass           string       `json:"storageClass"`
-	CustomDefs             []string     `json:"customDefs"`
-	AIBExtraArgs           []string     `json:"aibExtraArgs"`
-	AIBOverrideArgs        []string     `json:"aibOverrideArgs"`
-	ServeArtifact          bool         `json:"serveArtifact"`
-	EnvSecretRef           string       `json:"envSecretRef"`
+	Name                   string               `json:"name"`
+	Manifest               string               `json:"manifest"`
+	ManifestFileName       string               `json:"manifestFileName"`
+	Distro                 Distro               `json:"distro"`
+	Target                 Target               `json:"target"`
+	Architecture           Architecture         `json:"architecture"`
+	ExportFormat           ExportFormat         `json:"exportFormat"`
+	Mode                   Mode                 `json:"mode"`
+	AutomotiveImageBuilder string               `json:"automotiveImageBuilder"`
+	StorageClass           string               `json:"storageClass"`
+	CustomDefs             []string             `json:"customDefs"`
+	AIBExtraArgs           []string             `json:"aibExtraArgs"`
+	AIBOverrideArgs        []string             `json:"aibOverrideArgs"`
+	ServeArtifact          bool                 `json:"serveArtifact"`
+	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
+}
+
+type RegistryCredentials struct {
+	Enabled      bool   `json:"enabled"`
+	AuthType     string `json:"authType"`
+	RegistryURL  string `json:"registryUrl"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	Token        string `json:"token"`
+	DockerConfig string `json:"dockerConfig"`
 }
 
 // BuildResponse is returned by POST and GET build operations

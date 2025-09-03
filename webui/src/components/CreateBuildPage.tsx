@@ -22,6 +22,8 @@ import {
   SplitItem,
   Badge,
   Popover,
+  Checkbox,
+  Radio,
 
 
 } from "@patternfly/react-core";
@@ -41,6 +43,16 @@ interface UploadedFile {
   file: File;
 }
 
+interface RegistryCredentials {
+  enabled: boolean;
+  authType: "username-password" | "token" | "docker-config";
+  registryUrl: string;
+  username: string;
+  password: string;
+  token: string;
+  dockerConfig: string;
+}
+
 interface BuildFormData {
   name: string;
   manifest: string;
@@ -54,7 +66,7 @@ interface BuildFormData {
   aibExtraArgs: string;
   aibOverrideArgs: string;
   serveArtifact: boolean;
-  envSecretRef: string;
+  registryCredentials: RegistryCredentials;
 }
 
 interface BuildTemplateResponse {
@@ -71,7 +83,7 @@ interface BuildTemplateResponse {
   aibOverrideArgs?: string[];
   serveArtifact: boolean;
   sourceFiles?: string[];
-  envSecretRef?: string;
+  registryCredentials?: RegistryCredentials;
 }
 
 const BUILD_MODE_OPTIONS = [
@@ -189,7 +201,15 @@ const CreateBuildPage: React.FC = () => {
     aibExtraArgs: "",
     aibOverrideArgs: "",
     serveArtifact: true,
-    envSecretRef: "",
+    registryCredentials: {
+      enabled: false,
+      authType: "username-password",
+      registryUrl: "",
+      username: "",
+      password: "",
+      token: "",
+      dockerConfig: "",
+    },
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -236,7 +256,7 @@ const CreateBuildPage: React.FC = () => {
       aibExtraArgs: (t?.aibExtraArgs ?? []).join(" "),
       aibOverrideArgs: (t?.aibOverrideArgs ?? []).join(" "),
       serveArtifact: t?.serveArtifact ?? prev.serveArtifact,
-      envSecretRef: t?.envSecretRef ?? prev.envSecretRef,
+      registryCredentials: t?.registryCredentials ?? prev.registryCredentials,
     }));
 
     if (t.sourceFiles && t.sourceFiles.length > 0) {
@@ -254,6 +274,19 @@ const CreateBuildPage: React.FC = () => {
     value: string | boolean,
   ) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleRegistryCredentialsChange = (
+    field: keyof RegistryCredentials,
+    value: string | boolean,
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      registryCredentials: {
+        ...prev.registryCredentials,
+        [field]: value,
+      },
+    }));
   };
 
   const addTextFile = () => {
@@ -392,7 +425,7 @@ const CreateBuildPage: React.FC = () => {
           ? formData.aibOverrideArgs.split(" ").filter((arg) => arg.trim())
           : [],
         serveArtifact: formData.serveArtifact,
-        envSecretRef: formData.envSecretRef,
+        registryCredentials: formData.registryCredentials.enabled ? formData.registryCredentials : undefined,
       };
 
       const response = await authFetch(`${API_BASE}/v1/builds`, {
@@ -429,7 +462,15 @@ const CreateBuildPage: React.FC = () => {
           aibExtraArgs: "",
           aibOverrideArgs: "",
           serveArtifact: true,
-          envSecretRef: "",
+          registryCredentials: {
+            enabled: false,
+            authType: "username-password",
+            registryUrl: "",
+            username: "",
+            password: "",
+            token: "",
+            dockerConfig: "",
+          },
         });
         setTextFiles([]);
         setUploadedFiles([]);
@@ -690,16 +731,144 @@ const CreateBuildPage: React.FC = () => {
 
                                   <GridItem span={12}>
                                     <FormGroup
-                                      label={<PopoverLabel label="Environment Secret Reference" popoverContent="Name of a Kubernetes secret containing environment variables for private registry authentication (e.g., REGISTRY_USERNAME, REGISTRY_PASSWORD, REGISTRY_URL)" />}
-                                      fieldId="envSecretRef"
+                                      label={<PopoverLabel label="Private Registry Authentication" popoverContent="Configure authentication for private container registries used during the build process" />}
+                                      fieldId="registryCredentials"
                                     >
-                                      <TextInput
-                                        id="envSecretRef"
-                                        value={formData.envSecretRef}
-                                        onChange={(_event, value) =>
-                                          handleInputChange("envSecretRef", value)
+                                      <Checkbox
+                                        id="enable-registry-auth"
+                                        label="Enable private registry authentication"
+                                        isChecked={formData.registryCredentials.enabled}
+                                        onChange={(_event, checked) =>
+                                          handleRegistryCredentialsChange("enabled", checked)
                                         }
                                       />
+                                      
+                                      {formData.registryCredentials.enabled && (
+                                        <div style={{ marginTop: "16px", padding: "16px", border: "1px solid var(--pf-v5-global--BorderColor--100)", borderRadius: "4px" }}>
+                                          <Stack hasGutter>
+                                            <StackItem>
+                                              <FormGroup label="Authentication Type" fieldId="authType">
+                                                <div>
+                                                  <Radio
+                                                    id="auth-username-password"
+                                                    name="authType"
+                                                    label="Username & Password"
+                                                    isChecked={formData.registryCredentials.authType === "username-password"}
+                                                    onChange={() => handleRegistryCredentialsChange("authType", "username-password")}
+                                                  />
+                                                  <Radio
+                                                    id="auth-token"
+                                                    name="authType"
+                                                    label="Token"
+                                                    isChecked={formData.registryCredentials.authType === "token"}
+                                                    onChange={() => handleRegistryCredentialsChange("authType", "token")}
+                                                  />
+                                                  <Radio
+                                                    id="auth-docker-config"
+                                                    name="authType"
+                                                    label="Docker Config JSON"
+                                                    isChecked={formData.registryCredentials.authType === "docker-config"}
+                                                    onChange={() => handleRegistryCredentialsChange("authType", "docker-config")}
+                                                  />
+                                                </div>
+                                              </FormGroup>
+                                            </StackItem>
+
+                                            {formData.registryCredentials.authType !== "docker-config" && (
+                                              <StackItem>
+                                                <FormGroup label="Registry URL" fieldId="registryUrl" isRequired>
+                                                  <TextInput
+                                                    id="registryUrl"
+                                                    value={formData.registryCredentials.registryUrl}
+                                                    onChange={(_event, value) =>
+                                                      handleRegistryCredentialsChange("registryUrl", value)
+                                                    }
+                                                    placeholder="quay.io/my-org"
+                                                    isRequired
+                                                  />
+                                                </FormGroup>
+                                              </StackItem>
+                                            )}
+
+                                            {formData.registryCredentials.authType === "username-password" && (
+                                              <>
+                                                <StackItem>
+                                                  <Grid hasGutter>
+                                                    <GridItem span={6}>
+                                                      <FormGroup label="Username" fieldId="username" isRequired>
+                                                        <TextInput
+                                                          id="username"
+                                                          value={formData.registryCredentials.username}
+                                                          onChange={(_event, value) =>
+                                                            handleRegistryCredentialsChange("username", value)
+                                                          }
+                                                          placeholder="myusername"
+                                                          isRequired
+                                                        />
+                                                      </FormGroup>
+                                                    </GridItem>
+                                                    <GridItem span={6}>
+                                                      <FormGroup label="Password" fieldId="password" isRequired>
+                                                        <TextInput
+                                                          id="password"
+                                                          type="password"
+                                                          value={formData.registryCredentials.password}
+                                                          onChange={(_event, value) =>
+                                                            handleRegistryCredentialsChange("password", value)
+                                                          }
+                                                          placeholder="••••••••"
+                                                          isRequired
+                                                        />
+                                                      </FormGroup>
+                                                    </GridItem>
+                                                  </Grid>
+                                                </StackItem>
+                                              </>
+                                            )}
+
+                                            {formData.registryCredentials.authType === "token" && (
+                                              <StackItem>
+                                                <FormGroup label="Token" fieldId="token" isRequired>
+                                                  <TextInput
+                                                    id="token"
+                                                    type="password"
+                                                    value={formData.registryCredentials.token}
+                                                    onChange={(_event, value) =>
+                                                      handleRegistryCredentialsChange("token", value)
+                                                    }
+                                                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                                                    isRequired
+                                                  />
+                                                </FormGroup>
+                                              </StackItem>
+                                            )}
+
+                                            {formData.registryCredentials.authType === "docker-config" && (
+                                              <StackItem>
+                                                <FormGroup 
+                                                  label="Docker Config JSON" 
+                                                  fieldId="dockerConfig" 
+                                                  isRequired
+                                                >
+                                                  <TextArea
+                                                    id="dockerConfig"
+                                                    value={formData.registryCredentials.dockerConfig}
+                                                    onChange={(_event, value) =>
+                                                      handleRegistryCredentialsChange("dockerConfig", value)
+                                                    }
+                                                    placeholder='{"auths":{"registry.example.com":{"auth":"dXNlcm5hbWU6cGFzc3dvcmQ="}}}'
+                                                    rows={6}
+                                                    isRequired
+                                                  />
+                                                  <div style={{ fontSize: "0.875rem", color: "var(--pf-v5-global--Color--200)", marginTop: "4px" }}>
+                                                    Paste the contents of your ~/.docker/config.json file
+                                                  </div>
+                                                </FormGroup>
+                                              </StackItem>
+                                            )}
+                                          </Stack>
+                                        </div>
+                                      )}
                                     </FormGroup>
                                   </GridItem>
                                 </Grid>
