@@ -364,6 +364,39 @@ const BuildListPage: React.FC = () => {
     }
   };
 
+  const [artifactItems, setArtifactItems] = useState<{ name: string; sizeBytes: string }[] | null>(null);
+  const [loadingItems, setLoadingItems] = useState<boolean>(false);
+  const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
+
+  const fetchArtifactItems = async (buildName: string) => {
+    try {
+      setLoadingItems(true);
+      setError(null);
+      const resp = await authFetch(`${API_BASE}/v1/builds/${buildName}/artifacts`);
+      if (!resp.ok) {
+        setArtifactItems([]);
+        return;
+      }
+      const data = await resp.json();
+      setArtifactItems(Array.isArray(data.items) ? data.items : []);
+    } catch (e: any) {
+      setArtifactItems([]);
+    } finally {
+      setLoadingItems(false);
+    }
+  };
+
+  const downloadArtifactItem = async (buildName: string, fileName: string) => {
+    if (downloadingItem) return;
+    setDownloadingItem(fileName);
+    try {
+      const url = `${API_BASE}/v1/builds/${buildName}/artifacts/${encodeURIComponent(fileName)}`;
+      window.location.href = url;
+    } finally {
+      setTimeout(() => setDownloadingItem(null), 1200);
+    }
+  };
+
   const startAutoRefresh = (buildName: string) => {
     if (autoRefreshIntervalRef.current) {
       clearInterval(autoRefreshIntervalRef.current);
@@ -673,7 +706,50 @@ const BuildListPage: React.FC = () => {
                         >
                           {downloadingArtifact === selectedBuild ? 'Downloading...' : 'Download'}
                         </Button>
+                        <Button
+                          variant="tertiary"
+                          onClick={() => fetchArtifactItems(selectedBuild)}
+                          style={{ marginLeft: '8px' }}
+                        >
+                          Download separately
+                        </Button>
                       </ActionGroup>
+                      {loadingItems && (
+                        <div style={{ marginBottom: '12px' }}>
+                          <Spinner size="md" /> Loading items…
+                        </div>
+                      )}
+                      {artifactItems && artifactItems.length > 0 && (
+                        <div style={{ marginBottom: '16px' }}>
+                          <Table aria-label="Artifact items table">
+                            <Thead>
+                              <Tr>
+                                <Th>Item</Th>
+                                <Th>Size (bytes)</Th>
+                                <Th>Action</Th>
+                              </Tr>
+                            </Thead>
+                            <Tbody>
+                              {artifactItems.map((it) => (
+                                <Tr key={it.name}>
+                                  <Td>{it.name}</Td>
+                                  <Td>{it.sizeBytes}</Td>
+                                  <Td>
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() => downloadArtifactItem(selectedBuild, it.name)}
+                                      isLoading={downloadingItem === it.name}
+                                      isDisabled={!!downloadingItem}
+                                    >
+                                      {downloadingItem === it.name ? 'Downloading…' : 'Download'}
+                                    </Button>
+                                  </Td>
+                                </Tr>
+                              ))}
+                            </Tbody>
+                          </Table>
+                        </div>
+                      )}
                       <Alert
                         variant="info"
                         title="Direct Download URL"

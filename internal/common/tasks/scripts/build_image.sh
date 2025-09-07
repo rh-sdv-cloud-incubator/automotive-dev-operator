@@ -276,6 +276,24 @@ echo "Contents of shared workspace:"
 ls -la $(workspaces.shared-workspace.path)/
 
 if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
+  echo "Preparing individual compressed parts for ${exportFile}..."
+  parts_dir="$(workspaces.shared-workspace.path)/${exportFile}-parts"
+  mkdir -p "$parts_dir"
+  (
+    cd "$(workspaces.shared-workspace.path)"
+    for item in "${exportFile}"/*; do
+      [ -e "$item" ] || continue
+      base=$(basename "$item")
+      if [ -f "$item" ]; then
+        echo "Creating $parts_dir/${base}.gz"
+        gzip -c "$item" > "$parts_dir/${base}.gz" || echo "Failed to create $parts_dir/${base}.gz"
+      elif [ -d "$item" ]; then
+        echo "Creating $parts_dir/${base}.tar.gz"
+        tar -C "${exportFile}" -czf "$parts_dir/${base}.tar.gz" "$base" || echo "Failed to create $parts_dir/${base}.tar.gz"
+      fi
+    done
+  )
+
   echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
   tar -C $(workspaces.shared-workspace.path) -czf $(workspaces.shared-workspace.path)/${exportFile}.tar.gz ${exportFile} || echo "Failed to create ${exportFile}.tar.gz"
   echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
