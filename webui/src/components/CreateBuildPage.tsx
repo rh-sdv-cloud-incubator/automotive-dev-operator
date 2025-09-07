@@ -24,6 +24,10 @@ import {
   Popover,
   Checkbox,
   Radio,
+  Modal,
+  ModalVariant,
+  Bullseye,
+  Spinner,
 
 
 } from "@patternfly/react-core";
@@ -221,6 +225,7 @@ const CreateBuildPage: React.FC = () => {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [expectedFiles, setExpectedFiles] = useState<string[]>([]);
+  const [isRedirecting, setIsRedirecting] = useState(false);
 
 
   const initializedFromTemplate = useRef(false);
@@ -448,6 +453,8 @@ const CreateBuildPage: React.FC = () => {
           message: `Build "${result.name}" created successfully!`,
         });
 
+        setIsRedirecting(true);
+
         setFormData({
           name: "",
           manifest: "",
@@ -491,6 +498,7 @@ const CreateBuildPage: React.FC = () => {
   };
 
   return (
+    <>
     <PageSection>
       <Stack hasGutter>
         <StackItem>
@@ -1149,6 +1157,20 @@ const CreateBuildPage: React.FC = () => {
         </StackItem>
       </Stack>
     </PageSection>
+    <Modal
+      variant={ModalVariant.small}
+      title="Redirecting"
+      isOpen={isRedirecting}
+      onClose={() => {}}
+    >
+      <Bullseye style={{ height: '120px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <Spinner size="lg" />
+          <span style={{ marginLeft: 12 }}>Submitting build...</span>
+        </div>
+      </Bullseye>
+    </Modal>
+    </>
   );
 };
 

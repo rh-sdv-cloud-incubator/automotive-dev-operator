@@ -11,7 +11,11 @@ module.exports = function(app) {
       target,
       changeOrigin: true,
       secure,
-      logLevel: 'debug'
+      logLevel: 'debug',
+      onProxyReq: (proxyReq) => {
+        const token = process.env.DEV_BEARER_TOKEN || process.env.REACT_APP_DEV_BEARER_TOKEN;
+        if (token) proxyReq.setHeader('Authorization', `Bearer ${token}`);
+      }
     })
   );
 };
