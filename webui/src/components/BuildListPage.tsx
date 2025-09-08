@@ -23,7 +23,8 @@ import {
   Bullseye,
   Flex,
   FlexItem,
-  ActionGroup
+  ActionGroup,
+  ExpandableSection
 } from '@patternfly/react-core';
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { CubesIcon, DownloadIcon, EyeIcon, RedoIcon } from '@patternfly/react-icons';
@@ -367,6 +368,7 @@ const BuildListPage: React.FC = () => {
   const [artifactItems, setArtifactItems] = useState<{ name: string; sizeBytes: string }[] | null>(null);
   const [loadingItems, setLoadingItems] = useState<boolean>(false);
   const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
 
   const fetchArtifactItems = async (buildName: string) => {
     try {
@@ -711,7 +713,7 @@ const BuildListPage: React.FC = () => {
                           onClick={() => fetchArtifactItems(selectedBuild)}
                           style={{ marginLeft: '8px' }}
                         >
-                          Download separately
+                          Artifacts
                         </Button>
                       </ActionGroup>
                       {loadingItems && (
@@ -743,6 +745,32 @@ const BuildListPage: React.FC = () => {
                                     >
                                       {downloadingItem === it.name ? 'Downloading…' : 'Download'}
                                     </Button>
+                                    <div style={{ marginTop: '8px' }}>
+                                      <ExpandableSection
+                                        toggleText={expandedItem === it.name ? 'Hide command' : 'Show command'}
+                                        isExpanded={expandedItem === it.name}
+                                        onToggle={() => setExpandedItem(expandedItem === it.name ? null : it.name)}
+                                      >
+                                        <div style={{ marginBottom: '8px' }}>
+                                          <CodeBlock>
+                                            <CodeBlockCode>
+{`GET ${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifacts/${encodeURIComponent(it.name)}`}
+                                            </CodeBlockCode>
+                                          </CodeBlock>
+                                        </div>
+                                        <div>
+                                          <p style={{ marginTop: 0, marginBottom: '8px' }}>Example with curl:</p>
+                                          <CodeBlock>
+                                            <CodeBlockCode>
+{`TOKEN=$(oc whoami -t)
+curl -H "Authorization: Bearer $TOKEN" \
+     -o "${it.name}" \
+     "${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifacts/${encodeURIComponent(it.name)}"`}
+                                            </CodeBlockCode>
+                                          </CodeBlock>
+                                        </div>
+                                      </ExpandableSection>
+                                    </div>
                                   </Td>
                                 </Tr>
                               ))}
