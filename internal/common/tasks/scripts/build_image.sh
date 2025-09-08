@@ -275,8 +275,50 @@ cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo 
 echo "Contents of shared workspace:"
 ls -la $(workspaces.shared-workspace.path)/
 
+COMPRESSION="$(params.compression)"
+echo "Requested compression: $COMPRESSION"
+
+if [ "$COMPRESSION" = "lz4" ]; then
+  if ! command -v lz4 >/dev/null 2>&1; then
+    echo "lz4 not found. Attempting to install..."
+    if command -v dnf >/dev/null 2>&1; then
+      dnf -y install lz4 || true
+    fi
+    if command -v microdnf >/dev/null 2>&1; then
+      microdnf install -y lz4 || true
+    fi
+    if command -v yum >/dev/null 2>&1; then
+      yum -y install lz4 || true
+    fi
+    if ! command -v lz4 >/dev/null 2>&1; then
+      echo "lz4 still not available; falling back to gzip"
+      COMPRESSION="gzip"
+    fi
+  fi
+fi
+
+compress_file_gzip() {
+  src="$1"; dest="$2"
+  gzip -c "$src" > "$dest"
+}
+
+compress_file_lz4() {
+  src="$1"; dest="$2"
+  lz4 -z -f -q "$src" "$dest"
+}
+
+tar_dir_gzip() {
+  dir="$1"; out="$2"
+  tar -C $(workspaces.shared-workspace.path) -czf "$out" "$dir"
+}
+
+tar_dir_lz4() {
+  dir="$1"; out="$2"
+  tar -C $(workspaces.shared-workspace.path) -cf - "$dir" | lz4 -z -f -q > "$out"
+}
+
 if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
-  echo "Preparing individual compressed parts for ${exportFile}..."
+  echo "Preparing compressed parts for directory ${exportFile}..."
   parts_dir="$(workspaces.shared-workspace.path)/${exportFile}-parts"
   mkdir -p "$parts_dir"
   (
@@ -285,32 +327,74 @@ if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
       [ -e "$item" ] || continue
       base=$(basename "$item")
       if [ -f "$item" ]; then
-        echo "Creating $parts_dir/${base}.gz"
-        gzip -c "$item" > "$parts_dir/${base}.gz" || echo "Failed to create $parts_dir/${base}.gz"
+        case "$COMPRESSION" in
+          lz4)
+            echo "Creating $parts_dir/${base}.lz4"
+            compress_file_lz4 "$item" "$parts_dir/${base}.lz4" || echo "Failed to create $parts_dir/${base}.lz4" ;;
+          gzip|*)
+            echo "Creating $parts_dir/${base}.gz"
+            compress_file_gzip "$item" "$parts_dir/${base}.gz" || echo "Failed to create $parts_dir/${base}.gz" ;;
+        esac
       elif [ -d "$item" ]; then
-        echo "Creating $parts_dir/${base}.tar.gz"
-        tar -C "${exportFile}" -czf "$parts_dir/${base}.tar.gz" "$base" || echo "Failed to create $parts_dir/${base}.tar.gz"
+        case "$COMPRESSION" in
+          lz4)
+            echo "Creating $parts_dir/${base}.tar.lz4"
+            tar_dir_lz4 "${exportFile}/$base" "$parts_dir/${base}.tar.lz4" || echo "Failed to create $parts_dir/${base}.tar.lz4" ;;
+          gzip|*)
+            echo "Creating $parts_dir/${base}.tar.gz"
+            (cd "${exportFile}" && tar -czf "$parts_dir/${base}.tar.gz" "$base") || echo "Failed to create $parts_dir/${base}.tar.gz" ;;
+        esac
       fi
     done
   )
 
-  echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
-  tar -C $(workspaces.shared-workspace.path) -czf $(workspaces.shared-workspace.path)/${exportFile}.tar.gz ${exportFile} || echo "Failed to create ${exportFile}.tar.gz"
-  echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
-  if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" ]; then
-    echo "Removing uncompressed directory ${exportFile}"
-    rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
-    pushd $(workspaces.shared-workspace.path)
-    ln -sf ${exportFile}.tar.gz disk.img
-    popd
-  fi
+  case "$COMPRESSION" in
+    lz4)
+      echo "Creating compressed archive ${exportFile}.tar.lz4 in shared workspace..."
+      tar_dir_lz4 "${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.tar.lz4" || echo "Failed to create ${exportFile}.tar.lz4"
+      echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.lz4 || true
+      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.lz4" ]; then
+        echo "Removing uncompressed directory ${exportFile}"
+        rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
+        pushd $(workspaces.shared-workspace.path)
+        ln -sf ${exportFile}.tar.lz4 disk.img
+        popd
+      fi
+      ;;
+    gzip|*)
+      echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
+      tar_dir_gzip "${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" || echo "Failed to create ${exportFile}.tar.gz"
+      echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
+      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" ]; then
+        echo "Removing uncompressed directory ${exportFile}"
+        rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
+        pushd $(workspaces.shared-workspace.path)
+        ln -sf ${exportFile}.tar.gz disk.img
+        popd
+      fi
+      ;;
+  esac
 elif [ -f "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
-  echo "Creating compressed file ${exportFile}.gz in shared workspace..."
-  gzip -f $(workspaces.shared-workspace.path)/${exportFile} || echo "Failed to create ${exportFile}.gz"
-  echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.gz || true
-  if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.gz" ]; then
-    pushd $(workspaces.shared-workspace.path)
-    ln -sf ${exportFile}.gz disk.img
-    popd
-  fi
+  case "$COMPRESSION" in
+    lz4)
+      echo "Creating compressed file ${exportFile}.lz4 in shared workspace..."
+      compress_file_lz4 "$(workspaces.shared-workspace.path)/${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.lz4" || echo "Failed to create ${exportFile}.lz4"
+      echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.lz4 || true
+      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.lz4" ]; then
+        pushd $(workspaces.shared-workspace.path)
+        ln -sf ${exportFile}.lz4 disk.img
+        popd
+      fi
+      ;;
+    gzip|*)
+      echo "Creating compressed file ${exportFile}.gz in shared workspace..."
+      gzip -f $(workspaces.shared-workspace.path)/${exportFile} || echo "Failed to create ${exportFile}.gz"
+      echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.gz || true
+      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.gz" ]; then
+        pushd $(workspaces.shared-workspace.path)
+        ln -sf ${exportFile}.gz disk.img
+        popd
+      fi
+      ;;
+  esac
 fi

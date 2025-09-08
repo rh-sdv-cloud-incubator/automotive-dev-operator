@@ -72,6 +72,11 @@ type ImageBuildSpec struct {
 	// These environment variables will be available during the build process and can be used
 	// for private registry authentication (e.g., REGISTRY_USERNAME, REGISTRY_PASSWORD, REGISTRY_AUTH_FILE)
 	EnvSecretRef string `json:"envSecretRef,omitempty"`
+
+	// Compression specifies the compression algorithm for artifacts
+	// +kubebuilder:validation:Enum=lz4;gzip
+	// +kubebuilder:default=lz4
+	Compression string `json:"compression,omitempty"`
 }
 
 // Publishers defines the configuration for artifact publishing

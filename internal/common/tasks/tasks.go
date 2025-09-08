@@ -142,6 +142,15 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 					Description: "Export format for the build",
 				},
 				{
+					Name:        "compression",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Compression algorithm for artifacts (lz4, gzip)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "lz4",
+					},
+				},
+				{
 					Name:        "automotive-image-builder",
 					Type:        tektonv1.ParamTypeString,
 					Description: "automotive-image-builder container image to use",
@@ -338,6 +347,15 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Description: "Build this image mode (package, image)",
 				},
 				{
+					Name: "compression",
+					Type: tektonv1.ParamTypeString,
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "lz4",
+					},
+					Description: "Compression algorithm for artifacts (lz4, gzip)",
+				},
+				{
 					Name:        "storage-class",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Storage class for the PVC to build on (optional, uses cluster default if not specified)",
@@ -443,6 +461,13 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
 								StringVal: "$(params.export-format)",
+							},
+						},
+						{
+							Name: "compression",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.compression)",
 							},
 						},
 						{

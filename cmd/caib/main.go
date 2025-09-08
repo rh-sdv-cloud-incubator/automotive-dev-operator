@@ -45,6 +45,7 @@ var (
 	aibExtraArgs           string
 	aibOverrideArgs        string
 	compressArtifacts      bool
+	compressionAlgo        string
 	authToken              string
 )
 
@@ -96,6 +97,7 @@ func main() {
 	buildCmd.Flags().StringArrayVar(&customDefs, "define", []string{}, "Custom definition in KEY=VALUE format (can be specified multiple times)")
 	buildCmd.Flags().StringVar(&aibExtraArgs, "aib-args", "", "extra arguments passed to automotive-image-builder (space-separated)")
 	buildCmd.Flags().StringVar(&aibOverrideArgs, "override", "", "override arguments passed as-is to automotive-image-builder")
+	buildCmd.Flags().StringVar(&compressionAlgo, "compression", "lz4", "artifact compression algorithm (lz4|gzip)")
 	_ = buildCmd.MarkFlagRequired("arch")
 
 	downloadCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL (e.g. https://api.example)")
@@ -192,6 +194,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 			AIBExtraArgs:           aibArgsArray,
 			AIBOverrideArgs:        aibOverrideArray,
 			ServeArtifact:          download,
+			Compression:            compressionAlgo,
 		}
 
 		resp, err := api.CreateBuild(ctx, req)
@@ -759,8 +762,6 @@ func loadTokenFromKubeconfig() (string, error) {
 			return t, nil
 		}
 	}
-	// Exec-based auth providers (e.g., OpenShift, OIDC with exec) may store the token after running the exec plugin.
-	// As an extra best-effort, try `oc whoami -t` when available.
 	if path, err := exec.LookPath("oc"); err == nil && path != "" {
 		out, err := exec.Command(path, "whoami", "-t").Output()
 		if err == nil {

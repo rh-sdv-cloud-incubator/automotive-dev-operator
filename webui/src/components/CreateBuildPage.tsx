@@ -70,6 +70,7 @@ interface BuildFormData {
   aibExtraArgs: string;
   aibOverrideArgs: string;
   serveArtifact: boolean;
+  compression?: string;
   registryCredentials: RegistryCredentials;
 }
 
@@ -86,6 +87,7 @@ interface BuildTemplateResponse {
   aibExtraArgs?: string[];
   aibOverrideArgs?: string[];
   serveArtifact: boolean;
+  compression?: string;
   sourceFiles?: string[];
   registryCredentials?: RegistryCredentials;
 }
@@ -205,6 +207,7 @@ const CreateBuildPage: React.FC = () => {
     aibExtraArgs: "",
     aibOverrideArgs: "",
     serveArtifact: true,
+    compression: "lz4",
     registryCredentials: {
       enabled: false,
       authType: "username-password",
@@ -261,6 +264,7 @@ const CreateBuildPage: React.FC = () => {
       aibExtraArgs: (t?.aibExtraArgs ?? []).join(" "),
       aibOverrideArgs: (t?.aibOverrideArgs ?? []).join(" "),
       serveArtifact: t?.serveArtifact ?? prev.serveArtifact,
+      compression: t?.compression ?? prev.compression ?? "lz4",
       registryCredentials: t?.registryCredentials ?? prev.registryCredentials,
     }));
 
@@ -423,6 +427,7 @@ const CreateBuildPage: React.FC = () => {
         exportFormat: formData.exportFormat,
         mode: formData.mode,
         automotiveImageBuilder: formData.automotiveImageBuilder,
+        compression: formData.compression || "lz4",
         aibExtraArgs: formData.aibExtraArgs
           ? formData.aibExtraArgs.split(" ").filter((arg) => arg.trim())
           : [],
@@ -469,6 +474,7 @@ const CreateBuildPage: React.FC = () => {
           aibExtraArgs: "",
           aibOverrideArgs: "",
           serveArtifact: true,
+          compression: "lz4",
           registryCredentials: {
             enabled: false,
             authType: "username-password",
@@ -662,6 +668,24 @@ const CreateBuildPage: React.FC = () => {
                           </GridItem>
 
                           <GridItem xl={6} lg={6} md={12}>
+                            <FormGroup label={<PopoverLabel label="Compression" popoverContent="Compression algorithm for artifacts (lz4, gzip)" />} fieldId="compression">
+                              <TextInput
+                                id="compression"
+                                value={formData.compression || ""}
+                                onChange={(_event, value) =>
+                                  handleInputChange("compression", value)
+                                }
+                                placeholder="lz4 or gzip"
+                                list="compression-options"
+                              />
+                              <datalist id="compression-options">
+                                <option value="lz4" />
+                                <option value="gzip" />
+                              </datalist>
+                            </FormGroup>
+                          </GridItem>
+
+                          <GridItem xl={6} lg={6} md={12}>
                             <FormGroup label={<PopoverLabel label="Build Mode" popoverContent="Build mode (image, package)" />} fieldId="mode">
                               <TextInput
                                 id="mode"
@@ -680,7 +704,7 @@ const CreateBuildPage: React.FC = () => {
                             </FormGroup>
                           </GridItem>
 
-                          <GridItem span={12}>
+                          <GridItem xl={12} lg={12} md={12}>
                             <FormGroup
                               label={<PopoverLabel label="Automotive Image Builder Container" popoverContent="Container image used for building" />}
                               fieldId="automotiveImageBuilder"

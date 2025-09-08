@@ -91,6 +91,7 @@ type BuildRequest struct {
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
 	AIBOverrideArgs        []string             `json:"aibOverrideArgs"`
 	ServeArtifact          bool                 `json:"serveArtifact"`
+	Compression            string               `json:"compression,omitempty"`
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 }
 

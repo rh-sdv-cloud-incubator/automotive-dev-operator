@@ -373,6 +373,13 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 				StringVal: imageBuild.Spec.AutomotiveImageBuilder,
 			},
 		},
+		{
+			Name: "compression",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: imageBuild.Spec.Compression,
+			},
+		},
 	}
 
 	workspaces := []tektonv1.WorkspaceBinding{

@@ -62,6 +62,7 @@ interface BuildParams {
   exportFormat?: string;
   mode?: string;
   automotiveImageBuilder?: string;
+  compression?: string;
 }
 
 const BuildListPage: React.FC = () => {
@@ -339,6 +340,7 @@ const BuildListPage: React.FC = () => {
         exportFormat: tpl.exportFormat,
         mode: tpl.mode,
         automotiveImageBuilder: tpl.automotiveImageBuilder,
+        compression: tpl.compression,
       });
     } catch (e) {
     }
@@ -680,6 +682,8 @@ const BuildListPage: React.FC = () => {
                         <dd>{buildParams.mode || '-'}</dd>
                         <dt><strong>Image Builder:</strong></dt>
                         <dd style={{ wordBreak: 'break-all' }}>{buildParams.automotiveImageBuilder || '-'}</dd>
+                        <dt><strong>Compression:</strong></dt>
+                        <dd>{buildParams.compression || 'lz4'}</dd>
                       </>
                     )}
                     {buildDetails.artifactURL && (

@@ -485,6 +485,14 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		req.Mode = "image"
 	}
 
+	if strings.TrimSpace(req.Compression) == "" {
+		req.Compression = "lz4"
+	}
+	if req.Compression != "lz4" && req.Compression != "gzip" {
+		http.Error(w, "invalid compression: must be lz4 or gzip", http.StatusBadRequest)
+		return
+	}
+
 	if !req.Distro.IsValid() {
 		http.Error(w, "distro cannot be empty", http.StatusBadRequest)
 		return
@@ -614,6 +622,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       needsUpload,
 			EnvSecretRef:           envSecretRef,
+			Compression:            req.Compression,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -797,6 +806,7 @@ func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
 			AIBExtraArgs:           aibExtra,
 			AIBOverrideArgs:        aibOverride,
 			ServeArtifact:          build.Spec.ServeArtifact,
+			Compression:            build.Spec.Compression,
 		},
 		SourceFiles: sourceFiles,
 	})
@@ -1008,7 +1018,9 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 	sourcePath := "/workspace/shared/" + artifactFileName
 
 	tarGzPath := sourcePath + ".tar.gz"
+	tarLz4Path := sourcePath + ".tar.lz4"
 	simpleGzPath := sourcePath + ".gz"
+	simpleLz4Path := sourcePath + ".lz4"
 
 	checkTarGzReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -1033,24 +1045,80 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 		hasTarGz = strings.Contains(checkTarGzStdout.String(), "exists")
 	}
 
-	var gzPath string
-	var gzFileName string
+	var streamPath string
+	var outFileName string
 	var artifactType string
+	var compression string
 
-	if hasTarGz {
-		gzPath = tarGzPath
-		gzFileName = artifactFileName + ".tar.gz"
-		artifactType = "directory"
-	} else {
-		gzPath = simpleGzPath
-		gzFileName = artifactFileName
-		if !strings.HasSuffix(strings.ToLower(gzFileName), ".gz") {
-			gzFileName = gzFileName + ".gz"
-		}
-		artifactType = "file"
+	checkTarLz4Req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"sh", "-c", "test -f \"" + tarLz4Path + "\" && echo exists || echo missing"},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+	checkTarLz4Exec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkTarLz4Req.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (tar.lz4 check): %v", err), http.StatusInternalServerError)
+		return
+	}
+	var checkTarLz4Stdout strings.Builder
+	hasTarLz4 := false
+	if err := checkTarLz4Exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &checkTarLz4Stdout, Stderr: io.Discard}); err == nil {
+		hasTarLz4 = strings.Contains(checkTarLz4Stdout.String(), "exists")
 	}
 
-	if gzPath == "" {
+	if hasTarLz4 {
+		streamPath = tarLz4Path
+		outFileName = artifactFileName + ".tar.lz4"
+		artifactType = "directory"
+		compression = "lz4"
+	} else if hasTarGz {
+		streamPath = tarGzPath
+		outFileName = artifactFileName + ".tar.gz"
+		artifactType = "directory"
+		compression = "gzip"
+	} else {
+		// prefer lz4 single file if present
+		checkLz4Req := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(artifactPod.Name).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: "fileserver",
+				Command:   []string{"sh", "-c", "test -f \"" + simpleLz4Path + "\" && echo exists || echo missing"},
+				Stdout:    true,
+				Stderr:    true,
+			}, kscheme.ParameterCodec)
+		checkLz4Exec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkLz4Req.URL())
+		if err == nil {
+			var out strings.Builder
+			if err := checkLz4Exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: io.Discard}); err == nil {
+				if strings.Contains(out.String(), "exists") {
+					streamPath = simpleLz4Path
+					outFileName = artifactFileName + ".lz4"
+					artifactType = "file"
+					compression = "lz4"
+				}
+			}
+		}
+		if streamPath == "" {
+			streamPath = simpleGzPath
+			outFileName = artifactFileName
+			if !strings.HasSuffix(strings.ToLower(outFileName), ".gz") {
+				outFileName = outFileName + ".gz"
+			}
+			artifactType = "file"
+			compression = "gzip"
+		}
+	}
+
+	if streamPath == "" {
 		http.Error(w, "no compressed artifact found", http.StatusNotFound)
 		return
 	}
@@ -1062,7 +1130,7 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "fileserver",
-			Command:   []string{"sh", "-c", "wc -c < \"" + gzPath + "\""},
+			Command:   []string{"sh", "-c", "wc -c < \"" + streamPath + "\""},
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
@@ -1077,7 +1145,7 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	compressedSize := strings.TrimSpace(sizeStdout.String())
-	a.log.Info("Size of artifact", "artifact", gzPath, "size", compressedSize)
+	a.log.Info("Size of artifact", "artifact", streamPath, "size", compressedSize)
 	streamReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(artifactPod.Name).
@@ -1085,7 +1153,7 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "fileserver",
-			Command:   []string{"cat", gzPath},
+			Command:   []string{"cat", streamPath},
 			Stdout:    true,
 			Stderr:    true,
 		}, kscheme.ParameterCodec)
@@ -1095,11 +1163,15 @@ func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", gzFileName))
+	if compression == "lz4" {
+		w.Header().Set("Content-Type", "application/x-lz4")
+	} else {
+		w.Header().Set("Content-Type", "application/gzip")
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", outFileName))
 	w.Header().Set("Content-Length", compressedSize)
 	w.Header().Set("X-AIB-Artifact-Type", artifactType)
-	w.Header().Set("X-AIB-Compression", "gzip")
+	w.Header().Set("X-AIB-Compression", compression)
 	if hasTarGz {
 		w.Header().Set("X-AIB-Archive-Root", artifactFileName)
 	}
