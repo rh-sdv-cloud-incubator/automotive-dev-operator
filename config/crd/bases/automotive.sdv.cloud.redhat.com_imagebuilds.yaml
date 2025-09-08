@@ -46,6 +46,13 @@ spec:
                 description: AutomotiveImageBuilder specifies the image to use for
                   building
                 type: string
+              compression:
+                default: lz4
+                description: Compression specifies the compression algorithm for artifacts
+                enum:
+                - lz4
+                - gzip
+                type: string
               distro:
                 description: Distro specifies the distribution to build for (e.g.,
                   "cs9")

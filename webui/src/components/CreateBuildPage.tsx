@@ -207,7 +207,7 @@ const CreateBuildPage: React.FC = () => {
     aibExtraArgs: "",
     aibOverrideArgs: "",
     serveArtifact: true,
-    compression: "lz4",
+    compression: "gzip",
     registryCredentials: {
       enabled: false,
       authType: "username-password",
@@ -264,7 +264,7 @@ const CreateBuildPage: React.FC = () => {
       aibExtraArgs: (t?.aibExtraArgs ?? []).join(" "),
       aibOverrideArgs: (t?.aibOverrideArgs ?? []).join(" "),
       serveArtifact: t?.serveArtifact ?? prev.serveArtifact,
-      compression: t?.compression ?? prev.compression ?? "lz4",
+      compression: t?.compression ?? prev.compression ?? "gzip",
       registryCredentials: t?.registryCredentials ?? prev.registryCredentials,
     }));
 
@@ -474,7 +474,7 @@ const CreateBuildPage: React.FC = () => {
           aibExtraArgs: "",
           aibOverrideArgs: "",
           serveArtifact: true,
-          compression: "lz4",
+          compression: "gzip",
           registryCredentials: {
             enabled: false,
             authType: "username-password",

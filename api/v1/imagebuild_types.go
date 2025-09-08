@@ -75,7 +75,7 @@ type ImageBuildSpec struct {
 
 	// Compression specifies the compression algorithm for artifacts
 	// +kubebuilder:validation:Enum=lz4;gzip
-	// +kubebuilder:default=lz4
+	// +kubebuilder:default=gzip
 	Compression string `json:"compression,omitempty"`
 }
 

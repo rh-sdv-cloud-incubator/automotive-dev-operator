@@ -147,7 +147,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 					Description: "Compression algorithm for artifacts (lz4, gzip)",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "lz4",
+						StringVal: "gzip",
 					},
 				},
 				{

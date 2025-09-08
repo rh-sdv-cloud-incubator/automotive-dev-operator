@@ -486,7 +486,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(req.Compression) == "" {
-		req.Compression = "lz4"
+		req.Compression = "gzip"
 	}
 	if req.Compression != "lz4" && req.Compression != "gzip" {
 		http.Error(w, "invalid compression: must be lz4 or gzip", http.StatusBadRequest)
