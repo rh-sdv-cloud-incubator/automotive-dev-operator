@@ -131,7 +131,6 @@ paths:
             text/plain:
               schema:
                 type: string
-  /v1/builds/{name}/artifact:
   /v1/builds/{name}/template:
     parameters:
       - in: path

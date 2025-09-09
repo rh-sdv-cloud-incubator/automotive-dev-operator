@@ -158,10 +158,6 @@ func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 				a.log.Info("logs requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 				streamLogs(w, r, name)
 				return
-			case "artifact":
-				a.log.Info("artifact requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-				a.streamArtifact(w, r, name)
-				return
 			case "artifacts":
 				a.log.Info("artifacts list requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
 				a.listArtifacts(w, r, name)
@@ -176,6 +172,12 @@ func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
 			file := parts[4]
 			a.log.Info("artifact item requested", "build", name, "file", file, "reqID", r.Context().Value(ctxKeyReqID{}))
 			a.streamArtifactPart(w, r, name, file)
+			return
+		}
+		if len(parts) == 5 && parts[3] == "artifact" {
+			filename := parts[4]
+			a.log.Info("artifact by filename requested", "build", name, "filename", filename, "reqID", r.Context().Value(ctxKeyReqID{}))
+			a.streamArtifactByFilename(w, r, name, filename)
 			return
 		}
 		a.log.Info("get build", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
@@ -618,6 +620,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 			AutomotiveImageBuilder: req.AutomotiveImageBuilder,
 			StorageClass:           req.StorageClass,
 			ServeArtifact:          req.ServeArtifact,
+			ExposeRoute:            req.ServeArtifact,
 			ServeExpiryHours:       serveExpiryHours,
 			ManifestConfigMap:      cfgName,
 			InputFilesServer:       needsUpload,
@@ -927,261 +930,6 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// streamArtifact streams the artifact file from the artifact pod to the client over HTTP.
-func (a *APIServer) streamArtifact(w http.ResponseWriter, r *http.Request, name string) {
-	namespace := resolveNamespace()
-	ctx := r.Context()
-
-	k8sClient, err := getClientFromRequest(r)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	build := &automotivev1.ImageBuild{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
-		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if build.Status.Phase != "Completed" {
-		http.Error(w, "artifact not available until build completes", http.StatusConflict)
-		return
-	}
-
-	artifactFileName := build.Status.ArtifactFileName
-	if artifactFileName == "" {
-		var ext string
-		switch build.Spec.ExportFormat {
-		case "image":
-			ext = ".raw"
-		case "qcow2":
-			ext = ".qcow2"
-		default:
-			ext = "." + build.Spec.ExportFormat
-		}
-		artifactFileName = fmt.Sprintf("%s-%s%s", build.Spec.Distro, build.Spec.Target, ext)
-	}
-
-	var artifactPod *corev1.Pod
-	deadline := time.Now().Add(3 * time.Minute)
-	for {
-		podList := &corev1.PodList{}
-		if err := k8sClient.List(ctx, podList,
-			client.InNamespace(namespace),
-			client.MatchingLabels{
-				"app.kubernetes.io/name":                          "artifact-pod",
-				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
-			}); err != nil {
-			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
-			return
-		}
-		for i := range podList.Items {
-			p := &podList.Items[i]
-			if p.Status.Phase == corev1.PodRunning {
-				for _, cs := range p.Status.ContainerStatuses {
-					if cs.Name == "fileserver" && cs.Ready {
-						artifactPod = p
-						break
-					}
-				}
-			}
-			if artifactPod != nil {
-				break
-			}
-		}
-		if artifactPod != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
-			return
-		}
-		time.Sleep(3 * time.Second)
-	}
-
-	restCfg, err := getRESTConfigFromRequest(r)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
-		return
-	}
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
-		return
-	}
-	a.log.Info("Preparing to download artifact", "artifactFileName", artifactFileName)
-	sourcePath := "/workspace/shared/" + artifactFileName
-
-	tarGzPath := sourcePath + ".tar.gz"
-	tarLz4Path := sourcePath + ".tar.lz4"
-	simpleGzPath := sourcePath + ".gz"
-	simpleLz4Path := sourcePath + ".lz4"
-
-	checkTarGzReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(artifactPod.Name).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "fileserver",
-			Command:   []string{"sh", "-c", "test -f \"" + tarGzPath + "\" && echo exists || echo missing"},
-			Stdout:    true,
-			Stderr:    true,
-		}, kscheme.ParameterCodec)
-	a.log.Info("checkTarGzReq", "url", checkTarGzReq.URL())
-	checkTarGzExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkTarGzReq.URL())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (tar.gz check): %v", err), http.StatusInternalServerError)
-		return
-	}
-	var checkTarGzStdout strings.Builder
-	hasTarGz := false
-	if err := checkTarGzExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &checkTarGzStdout, Stderr: io.Discard}); err == nil {
-		hasTarGz = strings.Contains(checkTarGzStdout.String(), "exists")
-	}
-
-	var streamPath string
-	var outFileName string
-	var artifactType string
-	var compression string
-
-	checkTarLz4Req := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(artifactPod.Name).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "fileserver",
-			Command:   []string{"sh", "-c", "test -f \"" + tarLz4Path + "\" && echo exists || echo missing"},
-			Stdout:    true,
-			Stderr:    true,
-		}, kscheme.ParameterCodec)
-	checkTarLz4Exec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkTarLz4Req.URL())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (tar.lz4 check): %v", err), http.StatusInternalServerError)
-		return
-	}
-	var checkTarLz4Stdout strings.Builder
-	hasTarLz4 := false
-	if err := checkTarLz4Exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &checkTarLz4Stdout, Stderr: io.Discard}); err == nil {
-		hasTarLz4 = strings.Contains(checkTarLz4Stdout.String(), "exists")
-	}
-
-	if hasTarLz4 {
-		streamPath = tarLz4Path
-		outFileName = artifactFileName + ".tar.lz4"
-		artifactType = "directory"
-		compression = "lz4"
-	} else if hasTarGz {
-		streamPath = tarGzPath
-		outFileName = artifactFileName + ".tar.gz"
-		artifactType = "directory"
-		compression = "gzip"
-	} else {
-		// prefer lz4 single file if present
-		checkLz4Req := clientset.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Name(artifactPod.Name).
-			Namespace(namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: "fileserver",
-				Command:   []string{"sh", "-c", "test -f \"" + simpleLz4Path + "\" && echo exists || echo missing"},
-				Stdout:    true,
-				Stderr:    true,
-			}, kscheme.ParameterCodec)
-		checkLz4Exec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, checkLz4Req.URL())
-		if err == nil {
-			var out strings.Builder
-			if err := checkLz4Exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: io.Discard}); err == nil {
-				if strings.Contains(out.String(), "exists") {
-					streamPath = simpleLz4Path
-					outFileName = artifactFileName + ".lz4"
-					artifactType = "file"
-					compression = "lz4"
-				}
-			}
-		}
-		if streamPath == "" {
-			streamPath = simpleGzPath
-			outFileName = artifactFileName
-			if !strings.HasSuffix(strings.ToLower(outFileName), ".gz") {
-				outFileName = outFileName + ".gz"
-			}
-			artifactType = "file"
-			compression = "gzip"
-		}
-	}
-
-	if streamPath == "" {
-		http.Error(w, "no compressed artifact found", http.StatusNotFound)
-		return
-	}
-
-	sizeReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(artifactPod.Name).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "fileserver",
-			Command:   []string{"sh", "-c", "wc -c < \"" + streamPath + "\""},
-			Stdout:    true,
-			Stderr:    true,
-		}, kscheme.ParameterCodec)
-	sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (size check): %v", err), http.StatusInternalServerError)
-		return
-	}
-	var sizeStdout strings.Builder
-	if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
-		http.Error(w, fmt.Sprintf("size check stream: %v", err), http.StatusInternalServerError)
-		return
-	}
-	compressedSize := strings.TrimSpace(sizeStdout.String())
-	a.log.Info("Size of artifact", "artifact", streamPath, "size", compressedSize)
-	streamReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(artifactPod.Name).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "fileserver",
-			Command:   []string{"cat", streamPath},
-			Stdout:    true,
-			Stderr:    true,
-		}, kscheme.ParameterCodec)
-	streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if compression == "lz4" {
-		w.Header().Set("Content-Type", "application/x-lz4")
-	} else {
-		w.Header().Set("Content-Type", "application/gzip")
-	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", outFileName))
-	w.Header().Set("Content-Length", compressedSize)
-	w.Header().Set("X-AIB-Artifact-Type", artifactType)
-	w.Header().Set("X-AIB-Compression", compression)
-	if hasTarGz {
-		w.Header().Set("X-AIB-Archive-Root", artifactFileName)
-	}
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
-	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
-}
-
 func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name string) {
 	namespace := resolveNamespace()
 	ctx := r.Context()
@@ -1313,12 +1061,10 @@ func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name s
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// streamArtifactPart streams a single gzipped item from the parts directory
 func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, name, file string) {
 	namespace := resolveNamespace()
 	ctx := r.Context()
 
-	// Basic sanitization: basename only, disallow path separators
 	if strings.Contains(file, "/") || strings.Contains(file, "..") || strings.TrimSpace(file) == "" {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
@@ -1460,6 +1206,187 @@ func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, n
 	w.Header().Set("X-AIB-Compression", "gzip")
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
+	}
+
+	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+}
+
+// streamArtifactByFilename streams the specified artifact file from the artifact pod to the client over HTTP.
+func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Request, name, filename string) {
+	namespace := resolveNamespace()
+	ctx := r.Context()
+
+	if strings.Contains(filename, "/") || strings.Contains(filename, "..") || strings.TrimSpace(filename) == "" {
+		http.Error(w, "invalid file name", http.StatusBadRequest)
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	build := &automotivev1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if build.Status.Phase != "Completed" {
+		http.Error(w, "artifact not available until build completes", http.StatusConflict)
+		return
+	}
+
+	// Only allow the exact final artifact file name or files from the -parts directory
+	expected := strings.TrimSpace(build.Status.ArtifactFileName)
+	base := path.Base(filename)
+	allowed := base == expected
+
+	if !allowed {
+		// Check if it's a part file (from -parts directory)
+		if strings.HasSuffix(base, ".gz") || strings.HasSuffix(base, ".lz4") {
+			// Allow parts that follow the pattern: <expected>-parts/<filename>
+			if strings.Contains(base, ".tar.") || strings.HasPrefix(base, strings.TrimSuffix(expected, path.Ext(expected))) {
+				allowed = true
+			}
+		}
+	}
+
+	if !allowed {
+		http.Error(w, "file not allowed", http.StatusForbidden)
+		return
+	}
+
+	// Get REST config and clientset for pod operations
+	restCfg, err := getRESTConfigFromRequest(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the artifact pod
+	var artifactPod *corev1.Pod
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		podList := &corev1.PodList{}
+		if err := k8sClient.List(ctx, podList,
+			client.InNamespace(namespace),
+			client.MatchingLabels{
+				"app.kubernetes.io/name":                          "artifact-pod",
+				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
+			}); err != nil {
+			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		for i := range podList.Items {
+			p := &podList.Items[i]
+			if p.Status.Phase == corev1.PodRunning {
+				for _, cs := range p.Status.ContainerStatuses {
+					if cs.Name == "fileserver" && cs.Ready {
+						artifactPod = p
+						break
+					}
+				}
+			}
+			if artifactPod != nil {
+				break
+			}
+		}
+
+		if artifactPod != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	podPath := "/workspace/shared/" + base
+
+	// Check if file exists and get size
+	sizeReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"sh", "-c", "if [ -f '" + podPath + "' ]; then wc -c < '" + podPath + "'; else echo MISSING; fi"},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+
+	sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (size): %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var sizeStdout strings.Builder
+	if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
+		http.Error(w, fmt.Sprintf("size stream: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	sz := strings.TrimSpace(sizeStdout.String())
+	if sz == "" || sz == "MISSING" {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	// Set appropriate content type based on file extension
+	if strings.HasSuffix(strings.ToLower(base), ".lz4") {
+		w.Header().Set("Content-Type", "application/x-lz4")
+	} else if strings.Contains(strings.ToLower(base), ".tar.") {
+		// .tar.gz or .tar.lz4
+		if strings.HasSuffix(strings.ToLower(base), ".gz") {
+			w.Header().Set("Content-Type", "application/gzip")
+		} else {
+			w.Header().Set("Content-Type", "application/x-lz4")
+		}
+	} else if strings.HasSuffix(strings.ToLower(base), ".gz") {
+		w.Header().Set("Content-Type", "application/gzip")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", base))
+	w.Header().Set("Content-Length", sz)
+
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	// Stream the file content
+	streamReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(artifactPod.Name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "fileserver",
+			Command:   []string{"cat", podPath},
+			Stdout:    true,
+			Stderr:    true,
+		}, kscheme.ParameterCodec)
+
+	streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})

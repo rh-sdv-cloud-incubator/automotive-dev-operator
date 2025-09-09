@@ -64,7 +64,7 @@ The web UI integrates with the following REST API endpoints:
 - `GET /v1/builds` - List all builds  
 - `GET /v1/builds/{name}` - Get build details
 - `GET /v1/builds/{name}/logs` - Stream build logs
-- `GET /v1/builds/{name}/artifact` - Download build artifact
+- `GET /v1/builds/{name}/artifact/{filename}` - Download build artifact by filename
 
 ## Form Fields
 

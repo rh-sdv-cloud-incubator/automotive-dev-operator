@@ -346,7 +346,7 @@ const BuildListPage: React.FC = () => {
     }
   };
 
-  const downloadArtifact = (buildName: string) => {
+  const downloadArtifact = async (buildName: string) => {
     if (downloadInProgressRef.current === buildName) return;
     if (downloadingArtifact) return;
 
@@ -354,8 +354,25 @@ const BuildListPage: React.FC = () => {
       downloadInProgressRef.current = buildName;
       setDownloadingArtifact(buildName);
       setError(null);
-      const url = `${API_BASE}/v1/builds/${buildName}/artifact`;
+
+      let artifactFileName: string;
+      if (buildDetails && buildDetails.artifactFileName && selectedBuild === buildName) {
+        artifactFileName = buildDetails.artifactFileName;
+      } else {
+        const resp = await authFetch(`${API_BASE}/v1/builds/${buildName}`);
+        if (!resp.ok) {
+          throw new Error(`Failed to fetch build details: ${resp.status}`);
+        }
+        const details = await resp.json();
+        artifactFileName = details.artifactFileName;
+        if (!artifactFileName) {
+          throw new Error('Artifact filename not available');
+        }
+      }
+
+      const url = `${API_BASE}/v1/builds/${buildName}/artifact/${encodeURIComponent(artifactFileName)}`;
       window.location.href = url;
+
       setTimeout(() => {
         setDownloadingArtifact(null);
         downloadInProgressRef.current = null;
@@ -437,6 +454,7 @@ const BuildListPage: React.FC = () => {
     setSelectedBuild(buildName);
     setIsModalOpen(true);
     setActiveTab(0);
+    setArtifactItems(null);
     fetchBuildDetails(buildName);
     fetchBuildParams(buildName);
     setTimeout(() => {
@@ -710,14 +728,18 @@ const BuildListPage: React.FC = () => {
                           isLoading={downloadingArtifact === selectedBuild}
                           isDisabled={!!downloadingArtifact}
                         >
-                          {downloadingArtifact === selectedBuild ? 'Downloading...' : 'Download'}
+                          {downloadingArtifact === selectedBuild ? 'Downloading...' : 
+                            (buildDetails.artifactFileName && (buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) ? 
+                              'Download Complete Archive' : 'Download')}
                         </Button>
                         <Button
                           variant="tertiary"
                           onClick={() => fetchArtifactItems(selectedBuild)}
                           style={{ marginLeft: '8px' }}
+                          isLoading={loadingItems}
+                          isDisabled={loadingItems}
                         >
-                          Artifacts
+                          {loadingItems ? 'Loading...' : 'Artifacts'}
                         </Button>
                       </ActionGroup>
                       {loadingItems && (
@@ -727,6 +749,14 @@ const BuildListPage: React.FC = () => {
                       )}
                       {artifactItems && artifactItems.length > 0 && (
                         <div style={{ marginBottom: '16px' }}>
+                          <Alert
+                            variant="success"
+                            title="Individual Artifact Parts Available"
+                            isInline
+                            style={{ marginBottom: '12px' }}
+                          >
+                            <p>The following individual compressed parts are available for download. This allows you to download only specific components instead of the complete archive.</p>
+                          </Alert>
                           <Table aria-label="Artifact items table">
                             <Thead>
                               <Tr>
@@ -768,7 +798,7 @@ const BuildListPage: React.FC = () => {
                                             <CodeBlockCode>
 {`TOKEN=$(oc whoami -t)
 curl -H "Authorization: Bearer $TOKEN" \
-     -o "${it.name}" \
+     -OJ \
      "${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifacts/${encodeURIComponent(it.name)}"`}
                                             </CodeBlockCode>
                                           </CodeBlock>
@@ -784,32 +814,41 @@ curl -H "Authorization: Bearer $TOKEN" \
                       )}
                       <Alert
                         variant="info"
-                        title="Direct Download URL"
+                        title={buildDetails?.artifactFileName && (buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) ? 
+                          `Direct Download - Complete Archive: ${buildDetails.artifactFileName}` : 
+                          `Direct Download${buildDetails?.artifactFileName ? `: ${buildDetails.artifactFileName}` : ''}`}
                         isInline
                         isPlain
                       >
-                        <p style={{ marginBottom: '8px' }}>
-                          You can also download this artifact directly using the REST API:
-                        </p>
-                        <CodeBlock>
-                          <CodeBlockCode>
-{`GET ${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifact`}
-                          </CodeBlockCode>
-                        </CodeBlock>
-                        <p style={{ marginTop: '8px', marginBottom: '8px' }}>
-                          Example with curl:
-                        </p>
-                        <CodeBlock>
-                          <CodeBlockCode>
+                        {buildDetails?.artifactFileName && (
+                          <>
+                            {(buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) && (
+                              <p style={{ marginBottom: '8px', fontWeight: 'bold' }}>
+                                This is a packaged archive containing all build artifacts. Use the "Artifacts" button above to download individual parts.
+                              </p>
+                            )}
+                            <p style={{ marginBottom: '8px' }}>
+                              Direct file URL:
+                            </p>
+                            <CodeBlock>
+                              <CodeBlockCode>
+{`GET ${(buildDetails.artifactURL || API_BASE || window.location.origin).replace(/\/$/, '')}/v1/builds/${selectedBuild}/artifact/${buildDetails.artifactFileName}`}
+                              </CodeBlockCode>
+                            </CodeBlock>
+                            <p style={{ marginTop: '8px', marginBottom: '8px' }}>
+                              Example with curl:
+                            </p>
+                            <CodeBlock>
+                              <CodeBlockCode>
 {`TOKEN=$(oc whoami -t)
 curl -H "Authorization: Bearer $TOKEN" \\
-     -o "artifact.gz" \\
-     "${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifact"`}
-                          </CodeBlockCode>
-                        </CodeBlock>
-                        <p style={{ marginTop: '8px', fontSize: '0.875rem', color: 'var(--pf-v5-global--Color--200)' }}>
-                          The artifact will be served as a compressed file (.gz or .tar.gz)
-                        </p>
+     -OJ \\
+     "${(buildDetails.artifactURL || API_BASE || window.location.origin).replace(/\/$/, '')}/v1/builds/${selectedBuild}/artifact/${encodeURIComponent(buildDetails.artifactFileName)}"`}
+                              </CodeBlockCode>
+                            </CodeBlock>
+                          </>
+                        )}
+
                       </Alert>
                     </div>
                   )}

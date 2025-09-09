@@ -165,6 +165,10 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *automotivev
 					Name:        "manifest-file-path",
 					Description: "Path to the manifest file used for building",
 				},
+				{
+					Name:        "artifact-filename",
+					Description: "artifact filename placed in the shared workspace",
+				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{

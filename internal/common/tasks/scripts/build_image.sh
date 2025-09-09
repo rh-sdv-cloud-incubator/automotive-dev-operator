@@ -244,19 +244,6 @@ else
     cp -v "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
 fi
 
-if [ -d "/output/disk.img" ]; then
-    echo "disk.img is a directory, copying recursively..."
-    cp -rv "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
-elif [ -L "/output/disk.img" ]; then
-    echo "disk.img is a symlink, copying with -L to follow symlink..."
-    cp -vL "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
-elif [ -f "/output/disk.img" ]; then
-    echo "disk.img is a file, copying..."
-    cp -v "/output/disk.img" $(workspaces.shared-workspace.path)/${cleanName}${file_extension} || echo "Failed to copy disk.img"
-else
-    echo "Warning: disk.img is neither a file, directory, nor symlink"
-fi
-
 pushd $(workspaces.shared-workspace.path)
 if [ -d "${exportFile}" ]; then
     echo "Creating symlink to directory ${exportFile}"
@@ -269,7 +256,6 @@ else
 fi
 popd
 
-# Copy the image manifest
 cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo "Failed to copy image.json"
 
 echo "Contents of shared workspace:"
@@ -278,7 +264,7 @@ ls -la $(workspaces.shared-workspace.path)/
 COMPRESSION="$(params.compression)"
 echo "Requested compression: $COMPRESSION"
 
-if [ "$COMPRESSION" = "lz4" ]; then
+ensure_lz4() {
   if ! command -v lz4 >/dev/null 2>&1; then
     echo "lz4 not found. Attempting to install..."
     if command -v dnf >/dev/null 2>&1; then
@@ -295,6 +281,10 @@ if [ "$COMPRESSION" = "lz4" ]; then
       COMPRESSION="gzip"
     fi
   fi
+}
+
+if [ "$COMPRESSION" = "lz4" ]; then
+  ensure_lz4
 fi
 
 compress_file_gzip() {
@@ -317,9 +307,38 @@ tar_dir_lz4() {
   tar -C $(workspaces.shared-workspace.path) -cf - "$dir" | lz4 -z -f -q > "$out"
 }
 
+compress_file() {
+  src="$1"; dest="$2"
+  case "$COMPRESSION" in
+    lz4) compress_file_lz4 "$src" "$dest" ;;
+    gzip|*) compress_file_gzip "$src" "$dest" ;;
+  esac
+}
+
+tar_dir() {
+  dir="$1"; out="$2"
+  case "$COMPRESSION" in
+    lz4) tar_dir_lz4 "$dir" "$out" ;;
+    gzip|*) tar_dir_gzip "$dir" "$out" ;;
+  esac
+}
+
+case "$COMPRESSION" in
+  lz4)
+    EXT_FILE=".lz4"
+    EXT_DIR=".tar.lz4"
+    ;;
+  gzip|*)
+    EXT_FILE=".gz"
+    EXT_DIR=".tar.gz"
+    ;;
+esac
+
+final_name=""
 if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
   echo "Preparing compressed parts for directory ${exportFile}..."
-  parts_dir="$(workspaces.shared-workspace.path)/${exportFile}-parts"
+  final_compressed_name="${exportFile}${EXT_DIR}"
+  parts_dir="$(workspaces.shared-workspace.path)/${final_compressed_name}-parts"
   mkdir -p "$parts_dir"
   (
     cd "$(workspaces.shared-workspace.path)"
@@ -327,74 +346,49 @@ if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
       [ -e "$item" ] || continue
       base=$(basename "$item")
       if [ -f "$item" ]; then
-        case "$COMPRESSION" in
-          lz4)
-            echo "Creating $parts_dir/${base}.lz4"
-            compress_file_lz4 "$item" "$parts_dir/${base}.lz4" || echo "Failed to create $parts_dir/${base}.lz4" ;;
-          gzip|*)
-            echo "Creating $parts_dir/${base}.gz"
-            compress_file_gzip "$item" "$parts_dir/${base}.gz" || echo "Failed to create $parts_dir/${base}.gz" ;;
-        esac
+        echo "Creating $parts_dir/${base}${EXT_FILE}"
+        compress_file "$item" "$parts_dir/${base}${EXT_FILE}" || echo "Failed to create $parts_dir/${base}${EXT_FILE}"
       elif [ -d "$item" ]; then
-        case "$COMPRESSION" in
-          lz4)
-            echo "Creating $parts_dir/${base}.tar.lz4"
-            tar_dir_lz4 "${exportFile}/$base" "$parts_dir/${base}.tar.lz4" || echo "Failed to create $parts_dir/${base}.tar.lz4" ;;
-          gzip|*)
-            echo "Creating $parts_dir/${base}.tar.gz"
-            (cd "${exportFile}" && tar -czf "$parts_dir/${base}.tar.gz" "$base") || echo "Failed to create $parts_dir/${base}.tar.gz" ;;
-        esac
+        echo "Creating $parts_dir/${base}${EXT_DIR}"
+        tar_dir "${exportFile}/$base" "$parts_dir/${base}${EXT_DIR}" || echo "Failed to create $parts_dir/${base}${EXT_DIR}"
       fi
     done
   )
-
-  case "$COMPRESSION" in
-    lz4)
-      echo "Creating compressed archive ${exportFile}.tar.lz4 in shared workspace..."
-      tar_dir_lz4 "${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.tar.lz4" || echo "Failed to create ${exportFile}.tar.lz4"
-      echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.lz4 || true
-      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.lz4" ]; then
-        echo "Removing uncompressed directory ${exportFile}"
-        rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
-        pushd $(workspaces.shared-workspace.path)
-        ln -sf ${exportFile}.tar.lz4 disk.img
-        popd
-      fi
-      ;;
-    gzip|*)
-      echo "Creating compressed archive ${exportFile}.tar.gz in shared workspace..."
-      tar_dir_gzip "${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" || echo "Failed to create ${exportFile}.tar.gz"
-      echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.tar.gz || true
-      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.tar.gz" ]; then
-        echo "Removing uncompressed directory ${exportFile}"
-        rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
-        pushd $(workspaces.shared-workspace.path)
-        ln -sf ${exportFile}.tar.gz disk.img
-        popd
-      fi
-      ;;
-  esac
+  echo "Creating compressed archive ${final_compressed_name} in shared workspace..."
+  tar_dir "${exportFile}" "$(workspaces.shared-workspace.path)/${final_compressed_name}" || echo "Failed to create ${final_compressed_name}"
+  echo "Compressed archive size:" && ls -lah $(workspaces.shared-workspace.path)/${final_compressed_name} || true
+  if [ -f "$(workspaces.shared-workspace.path)/${final_compressed_name}" ]; then
+    echo "Removing uncompressed directory ${exportFile} (keeping parts directory)"
+    rm -rf "$(workspaces.shared-workspace.path)/${exportFile}"
+    pushd $(workspaces.shared-workspace.path)
+    ln -sf ${final_compressed_name} disk.img
+    final_name="${final_compressed_name}"
+    popd
+    echo "Available artifacts:"
+    ls -la $(workspaces.shared-workspace.path)/ || true
+    if [ -d "$(workspaces.shared-workspace.path)/${final_compressed_name}-parts" ]; then
+      echo "Individual compressed parts in ${final_compressed_name}-parts/:"
+      ls -la "$(workspaces.shared-workspace.path)/${final_compressed_name}-parts/" || true
+    fi
+  fi
 elif [ -f "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
-  case "$COMPRESSION" in
-    lz4)
-      echo "Creating compressed file ${exportFile}.lz4 in shared workspace..."
-      compress_file_lz4 "$(workspaces.shared-workspace.path)/${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}.lz4" || echo "Failed to create ${exportFile}.lz4"
-      echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.lz4 || true
-      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.lz4" ]; then
-        pushd $(workspaces.shared-workspace.path)
-        ln -sf ${exportFile}.lz4 disk.img
-        popd
-      fi
-      ;;
-    gzip|*)
-      echo "Creating compressed file ${exportFile}.gz in shared workspace..."
-      gzip -f $(workspaces.shared-workspace.path)/${exportFile} || echo "Failed to create ${exportFile}.gz"
-      echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}.gz || true
-      if [ -f "$(workspaces.shared-workspace.path)/${exportFile}.gz" ]; then
-        pushd $(workspaces.shared-workspace.path)
-        ln -sf ${exportFile}.gz disk.img
-        popd
-      fi
-      ;;
-  esac
+  echo "Creating compressed file ${exportFile}${EXT_FILE} in shared workspace..."
+  compress_file "$(workspaces.shared-workspace.path)/${exportFile}" "$(workspaces.shared-workspace.path)/${exportFile}${EXT_FILE}" || echo "Failed to create ${exportFile}${EXT_FILE}"
+  echo "Compressed file size:" && ls -lah $(workspaces.shared-workspace.path)/${exportFile}${EXT_FILE} || true
+  if [ -f "$(workspaces.shared-workspace.path)/${exportFile}${EXT_FILE}" ]; then
+    pushd $(workspaces.shared-workspace.path)
+    ln -sf ${exportFile}${EXT_FILE} disk.img
+    final_name="${exportFile}${EXT_FILE}"
+    popd
+  fi
+fi
+
+if [ -z "$final_name" ]; then
+  guess=$(ls -1 $(workspaces.shared-workspace.path)/${cleanName}* 2>/dev/null | head -n1)
+  if [ -n "$guess" ]; then
+    final_name=$(basename "$guess")
+  fi
+fi
+if [ -n "$final_name" ]; then
+  echo "$final_name" > /tekton/results/artifact-filename || true
 fi

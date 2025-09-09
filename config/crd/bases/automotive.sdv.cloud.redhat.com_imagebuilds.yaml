@@ -47,7 +47,7 @@ spec:
                   building
                 type: string
               compression:
-                default: lz4
+                default: gzip
                 description: Compression specifies the compression algorithm for artifacts
                 enum:
                 - lz4

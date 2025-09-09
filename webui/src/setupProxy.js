@@ -5,6 +5,12 @@ module.exports = function(app) {
   const target = process.env.WEBUI_PROXY_TARGET || process.env.REACT_APP_WEBUI_PROXY_TARGET || defaultTarget;
   const secure = process.env.WEBUI_PROXY_SECURE === 'false' ? false : true;
 
+  app.get('/config.js', (req, res) => {
+    const apiBase = process.env.WEBUI_API_BASE || process.env.REACT_APP_API_BASE || '';
+    res.set('Content-Type', 'application/javascript');
+    res.send(`window.__API_BASE = ${JSON.stringify(apiBase)};\n`);
+  });
+
   app.use(
     '/v1',
     createProxyMiddleware({

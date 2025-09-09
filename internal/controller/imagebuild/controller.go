@@ -3,6 +3,7 @@ package imagebuild
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -238,6 +239,17 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 	}
 
 	if isTaskRunSuccessful(taskRun) {
+		for _, res := range taskRun.Status.TaskRunStatusFields.Results {
+			if res.Name == "artifact-filename" && res.Value.StringVal != "" {
+				fresh := &automotivev1.ImageBuild{}
+				if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err == nil {
+					patch := client.MergeFrom(fresh.DeepCopy())
+					fresh.Status.ArtifactFileName = res.Value.StringVal
+					_ = r.Status().Patch(ctx, fresh, patch)
+				}
+				break
+			}
+		}
 		if err := r.updateStatus(ctx, imageBuild, "Completed", "Build completed successfully"); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 		}
@@ -495,10 +507,13 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 		fileExtension = fmt.Sprintf(".%s", latestImageBuild.Spec.ExportFormat)
 	}
 
-	fileName := fmt.Sprintf("%s-%s%s",
-		latestImageBuild.Spec.Distro,
-		latestImageBuild.Spec.Target,
-		fileExtension)
+	fileName := strings.TrimSpace(latestImageBuild.Status.ArtifactFileName)
+	if fileName == "" {
+		fileName = fmt.Sprintf("%s-%s%s",
+			latestImageBuild.Spec.Distro,
+			latestImageBuild.Spec.Target,
+			fileExtension)
+	}
 
 	log.Info("Setting artifact info", "pvc", pvcName, "fileName", fileName)
 
@@ -513,7 +528,7 @@ func (r *ImageBuildReconciler) updateArtifactInfo(ctx context.Context, imageBuil
 	}
 
 	if latestImageBuild.Spec.ExposeRoute {
-		routeName := fmt.Sprintf("%s-artifacts", latestImageBuild.Name)
+		routeName := "ado-build-api"
 		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
@@ -750,12 +765,16 @@ server {
     listen 8080;
     server_name localhost;
 
+    # Serve artifacts directly from the mounted PVC
+    root /workspace/shared;
+    autoindex on;
+    autoindex_exact_size off;
+    autoindex_localtime on;
+
     location / {
-        root   /;
-        autoindex on;
-        autoindex_exact_size off;
-        autoindex_localtime on;
-        try_files $uri $uri/ =404;
+        try_files $uri =404;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     error_page   500 502 503 504  /50x.html;
