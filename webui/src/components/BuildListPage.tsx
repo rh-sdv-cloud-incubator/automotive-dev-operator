@@ -728,7 +728,7 @@ const BuildListPage: React.FC = () => {
                           isLoading={downloadingArtifact === selectedBuild}
                           isDisabled={!!downloadingArtifact}
                         >
-                          {downloadingArtifact === selectedBuild ? 'Downloading...' : 
+                          {downloadingArtifact === selectedBuild ? 'Downloading...' :
                             (buildDetails.artifactFileName && (buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) ? 
                               'Download Complete Archive' : 'Download')}
                         </Button>
@@ -815,7 +815,7 @@ curl -H "Authorization: Bearer $TOKEN" \
                       <Alert
                         variant="info"
                         title={buildDetails?.artifactFileName && (buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) ? 
-                          `Direct Download - Complete Archive: ${buildDetails.artifactFileName}` : 
+                          `Direct Download - Complete Archive: ${buildDetails.artifactFileName}` :
                           `Direct Download${buildDetails?.artifactFileName ? `: ${buildDetails.artifactFileName}` : ''}`}
                         isInline
                         isPlain

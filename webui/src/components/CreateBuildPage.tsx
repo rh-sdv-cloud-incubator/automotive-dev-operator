@@ -580,8 +580,8 @@ const CreateBuildPage: React.FC = () => {
 
               {/* Build Configuration */}
               <StackItem>
-                <Card>
-                  <CardBody>
+                <Card style={{ overflow: "visible" }}>
+                  <CardBody style={{ overflow: "visible" }}>
                     <Stack hasGutter>
                       <StackItem>
                         <Title headingLevel="h2" size="lg">
@@ -668,24 +668,6 @@ const CreateBuildPage: React.FC = () => {
                           </GridItem>
 
                           <GridItem xl={6} lg={6} md={12}>
-                            <FormGroup label={<PopoverLabel label="Compression" popoverContent="Compression algorithm for artifacts (lz4, gzip)" />} fieldId="compression">
-                              <TextInput
-                                id="compression"
-                                value={formData.compression || ""}
-                                onChange={(_event, value) =>
-                                  handleInputChange("compression", value)
-                                }
-                                placeholder="lz4 or gzip"
-                                list="compression-options"
-                              />
-                              <datalist id="compression-options">
-                                <option value="lz4" />
-                                <option value="gzip" />
-                              </datalist>
-                            </FormGroup>
-                          </GridItem>
-
-                          <GridItem xl={6} lg={6} md={12}>
                             <FormGroup label={<PopoverLabel label="Build Mode" popoverContent="Build mode (image, package)" />} fieldId="mode">
                               <TextInput
                                 id="mode"
@@ -726,9 +708,9 @@ const CreateBuildPage: React.FC = () => {
                               onToggle={(_event, expanded) =>
                                 setIsAdvancedOpen(expanded as boolean)
                               }
+                              style={{ overflow: "visible" }}
                             >
-                              <div style={{ padding: "16px 0" }}>
-                                <Grid hasGutter>
+                              <Grid hasGutter style={{ paddingTop: "16px" }}>
                                   <GridItem span={6}>
                                     <FormGroup
                                       label={<PopoverLabel label="AIB Extra Arguments" popoverContent="Additional arguments for automotive-image-builder (e.g., --fusa, --define)" />}
@@ -758,6 +740,24 @@ const CreateBuildPage: React.FC = () => {
                                         }
                                         placeholder="Complete override of AIB arguments"
                                       />
+                                    </FormGroup>
+                                  </GridItem>
+
+                                  <GridItem span={6}>
+                                    <FormGroup label={<PopoverLabel label="Compression" popoverContent="Compression algorithm for artifacts (lz4, gzip)" />} fieldId="compression">
+                                      <TextInput
+                                        id="compression"
+                                        value={formData.compression || ""}
+                                        onChange={(_event, value) =>
+                                          handleInputChange("compression", value)
+                                        }
+                                        placeholder="lz4 or gzip"
+                                        list="compression-options"
+                                      />
+                                      <datalist id="compression-options">
+                                        <option value="lz4" />
+                                        <option value="gzip" />
+                                      </datalist>
                                     </FormGroup>
                                   </GridItem>
 
@@ -903,8 +903,7 @@ const CreateBuildPage: React.FC = () => {
                                       )}
                                     </FormGroup>
                                   </GridItem>
-                                </Grid>
-                              </div>
+                              </Grid>
                             </ExpandableSection>
                           </GridItem>
                         </Grid>
