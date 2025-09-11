@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   PageSection,
   Title,
@@ -28,6 +28,8 @@ import {
   ModalVariant,
   Bullseye,
   Spinner,
+  Switch,
+  NumberInput,
 
 
 } from "@patternfly/react-core";
@@ -55,6 +57,115 @@ interface RegistryCredentials {
   password: string;
   token: string;
   dockerConfig: string;
+}
+
+interface ManifestWizardData {
+  name: string;
+  version: string;
+  content: {
+    rpms: string[];
+    enable_repos: string[];
+    repos: Array<{
+      id: string;
+      baseurl: string;
+      priority?: number;
+    }>;
+    container_images: Array<{
+      source: string;
+      tag?: string;
+      digest?: string;
+      name?: string;
+      "containers-transport"?: "docker" | "containers-storage";
+      index?: boolean;
+    }>;
+    add_files: Array<{
+      path: string;
+      source_path?: string;
+      url?: string;
+      text?: string;
+      source_glob?: string;
+      preserve_path?: boolean;
+      max_files?: number;
+      allow_empty?: boolean;
+    }>;
+    chmod_files: Array<{
+      path: string;
+      mode: string;
+      recursive?: boolean;
+    }>;
+    chown_files: Array<{
+      path: string;
+      user?: string | number;
+      group?: string | number;
+      recursive?: boolean;
+    }>;
+    remove_files: Array<{
+      path: string;
+    }>;
+    make_dirs: Array<{
+      path: string;
+      mode?: number;
+      parents?: boolean;
+      exist_ok?: boolean;
+    }>;
+    systemd?: {
+      enabled_services?: string[];
+      disabled_services?: string[];
+    };
+    sbom?: {
+      doc_path: string;
+    };
+  };
+  qm?: {
+    content: any; // Same structure as content above
+    memory_limit?: {
+      max?: string;
+      high?: string;
+    };
+    cpu_weight?: string | number;
+    container_checksum?: string;
+  };
+  network?: {
+    static?: {
+      ip: string;
+      ip_prefixlen: number;
+      gateway: string;
+      dns: string;
+      iface?: string;
+      load_module?: string;
+    };
+    dynamic?: {};
+  };
+  image?: {
+    image_size?: string;
+    selinux_mode?: "enforcing" | "permissive";
+    selinux_policy?: string;
+    selinux_booleans?: { [key: string]: boolean };
+    partitions?: any; // Complex partition structure
+    hostname?: string;
+    ostree_ref?: string;
+  };
+  auth?: {
+    root_password?: string | null;
+    root_ssh_keys?: string[] | null;
+    sshd_config?: {
+      PasswordAuthentication?: boolean;
+      PermitRootLogin?: boolean | "prohibit-password" | "forced-commands-only";
+    };
+    users?: { [username: string]: any };
+    groups?: { [groupname: string]: any };
+  };
+  kernel?: {
+    debug_logging?: boolean;
+    cmdline?: string[];
+    kernel_package?: string;
+    kernel_version?: string;
+    loglevel?: number;
+    remove_modules?: string[];
+  };
+  experimental?: {
+    internal_defines?: { [key: string]: any };
+  };
 }
 
 interface BuildFormData {
@@ -219,6 +330,24 @@ const CreateBuildPage: React.FC = () => {
     },
   });
 
+  // Wizard mode state
+  const [useWizard, setUseWizard] = useState(false);
+  const [wizardData, setWizardData] = useState<ManifestWizardData>({
+    name: "",
+    version: "",
+    content: {
+      rpms: [],
+      enable_repos: [],
+      repos: [],
+      container_images: [],
+      add_files: [],
+      chmod_files: [],
+      chown_files: [],
+      remove_files: [],
+      make_dirs: [],
+    },
+  });
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [alert, setAlert] = useState<{
     type: "success" | "danger";
@@ -229,7 +358,138 @@ const CreateBuildPage: React.FC = () => {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [expectedFiles, setExpectedFiles] = useState<string[]>([]);
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [isSystemdOpen, setIsSystemdOpen] = useState(false);
+  const [isFilesOpen, setIsFilesOpen] = useState(false);
 
+
+  // Helper function to convert wizard data to YAML
+  const generateYAMLFromWizard = (data: ManifestWizardData): string => {
+    // Don't remove the name field even if it's empty, as it's required
+    const safeName = data.name || '';
+    const safeVersion = data.version || '';
+
+    // Build YAML sections only if they have content
+    let yaml = `# Generated from wizard\nname: "${safeName}"`;
+
+    if (safeVersion) {
+      yaml += `\nversion: "${safeVersion}"`;
+    }
+
+    // Content section
+    const hasContent = data.content && (
+      (data.content.rpms && data.content.rpms.length > 0) ||
+      (data.content.enable_repos && data.content.enable_repos.length > 0) ||
+      (data.content.container_images && data.content.container_images.length > 0) ||
+      (data.content.add_files && data.content.add_files.length > 0) ||
+      (data.content.systemd && (data.content.systemd.enabled_services?.length || data.content.systemd.disabled_services?.length))
+    );
+
+    if (hasContent) {
+      yaml += `\ncontent:`;
+
+      if (data.content.rpms && data.content.rpms.length > 0) {
+        yaml += `\n  rpms:`;
+        data.content.rpms.forEach(rpm => {
+          yaml += `\n    - "${rpm}"`;
+        });
+      }
+
+      if (data.content.enable_repos && data.content.enable_repos.length > 0) {
+        yaml += `\n  enable_repos:`;
+        data.content.enable_repos.forEach(repo => {
+          yaml += `\n    - "${repo}"`;
+        });
+      }
+
+      if (data.content.container_images && data.content.container_images.length > 0) {
+        yaml += `\n  container_images:`;
+        data.content.container_images.forEach(img => {
+          if (img.source) {
+            yaml += `\n    - source: "${img.source}"`;
+            if (img.tag) yaml += `\n      tag: "${img.tag}"`;
+            if (img.digest) yaml += `\n      digest: "${img.digest}"`;
+            if (img.name) yaml += `\n      name: "${img.name}"`;
+            if (img["containers-transport"]) yaml += `\n      containers-transport: "${img["containers-transport"]}"`;
+            if (img.index) yaml += `\n      index: ${img.index}`;
+          }
+        });
+      }
+
+      if (data.content.add_files && data.content.add_files.length > 0) {
+        yaml += `\n  add_files:`;
+        data.content.add_files.forEach(file => {
+          if (file.path) {
+            yaml += `\n    - path: "${file.path}"`;
+            if (file.source_path) yaml += `\n      source_path: "${file.source_path}"`;
+            if (file.url) yaml += `\n      url: "${file.url}"`;
+            if (file.text) yaml += `\n      text: |\n        ${file.text.split('\n').join('\n        ')}`;
+            if (file.source_glob) {
+              yaml += `\n      source_glob: "${file.source_glob}"`;
+              if (file.preserve_path !== undefined) yaml += `\n      preserve_path: ${file.preserve_path}`;
+              if (file.max_files && file.max_files !== 1000) yaml += `\n      max_files: ${file.max_files}`;
+              if (file.allow_empty) yaml += `\n      allow_empty: ${file.allow_empty}`;
+            }
+          }
+        });
+      }
+
+      if (data.content.systemd && (data.content.systemd.enabled_services?.length || data.content.systemd.disabled_services?.length)) {
+        yaml += `\n  systemd:`;
+        if (data.content.systemd.enabled_services?.length) {
+          yaml += `\n    enabled_services:`;
+          data.content.systemd.enabled_services.forEach(service => {
+            yaml += `\n      - "${service}"`;
+          });
+        }
+        if (data.content.systemd.disabled_services?.length) {
+          yaml += `\n    disabled_services:`;
+          data.content.systemd.disabled_services.forEach(service => {
+            yaml += `\n      - "${service}"`;
+          });
+        }
+      }
+    }
+
+    // Network section
+    if (data.network) {
+      if (data.network.static) {
+        yaml += `\nnetwork:\n  static:`;
+        yaml += `\n    ip: "${data.network.static.ip}"`;
+        yaml += `\n    ip_prefixlen: ${data.network.static.ip_prefixlen}`;
+        yaml += `\n    gateway: "${data.network.static.gateway}"`;
+        yaml += `\n    dns: "${data.network.static.dns}"`;
+        if (data.network.static.iface) yaml += `\n    iface: "${data.network.static.iface}"`;
+        if (data.network.static.load_module) yaml += `\n    load_module: "${data.network.static.load_module}"`;
+      } else if (data.network.dynamic) {
+        yaml += `\nnetwork:\n  dynamic: {}`;
+      }
+    }
+
+    // Image section
+    if (data.image && (data.image.image_size || data.image.selinux_mode || data.image.hostname)) {
+      yaml += `\nimage:`;
+      if (data.image.image_size) yaml += `\n  image_size: "${data.image.image_size}"`;
+      if (data.image.selinux_mode) yaml += `\n  selinux_mode: "${data.image.selinux_mode}"`;
+      if (data.image.hostname) yaml += `\n  hostname: "${data.image.hostname}"`;
+    }
+
+    return yaml;
+  };
+
+  // Helper function to sync wizard data to manifest
+  const syncWizardToManifest = useCallback(() => {
+    if (useWizard) {
+      const yamlContent = generateYAMLFromWizard(wizardData);
+      setFormData(prev => ({ ...prev, manifest: yamlContent }));
+    }
+  }, [useWizard, wizardData]);
+
+  // Effect to sync wizard data when it changes
+  useEffect(() => {
+    if (useWizard) {
+      syncWizardToManifest();
+    }
+  }, [wizardData, useWizard, syncWizardToManifest]);
 
   const initializedFromTemplate = useRef(false);
   useEffect(() => {
@@ -539,7 +799,7 @@ const CreateBuildPage: React.FC = () => {
                       <StackItem>
                         <Grid hasGutter>
                           <GridItem span={6}>
-                            <FormGroup 
+                            <FormGroup
                               label={<PopoverLabel label="Build Name" popoverContent="A unique identifier for your build" isRequired />} 
                               fieldId="name"
                             >
@@ -559,16 +819,39 @@ const CreateBuildPage: React.FC = () => {
                               label={<PopoverLabel label="Manifest Content" popoverContent="YAML configuration that defines your build requirements" isRequired />}
                               fieldId="manifest"
                             >
-                              <TextArea
-                                id="manifest"
-                                value={formData.manifest}
-                                onChange={(_event, value) =>
-                                  handleInputChange("manifest", value)
-                                }
-                                placeholder="Enter your YAML manifest content here..."
-                                rows={12}
-                                isRequired
-                              />
+                              <Stack hasGutter>
+                                <StackItem>
+                                  <Flex alignItems={{ default: "alignItemsCenter" }}>
+                                    <FlexItem>
+                                      <Switch
+                                        id="wizard-toggle"
+                                        label={useWizard ? "Wizard" : "YAML"}
+                                        isChecked={useWizard}
+                                        onChange={(_event, checked) => {
+                                          setUseWizard(checked);
+                                          if (!checked) {
+                                            syncWizardToManifest();
+                                          }
+                                        }}
+                                      />
+                                    </FlexItem>
+                                  </Flex>
+                                </StackItem>
+                                {!useWizard && (
+                                  <StackItem>
+                                    <TextArea
+                                      id="manifest"
+                                      value={formData.manifest}
+                                      onChange={(_event, value) =>
+                                        handleInputChange("manifest", value)
+                                      }
+                                      placeholder="Enter your YAML manifest content here..."
+                                      rows={12}
+                                      isRequired
+                                    />
+                                  </StackItem>
+                                )}
+                              </Stack>
                             </FormGroup>
                           </GridItem>
                         </Grid>
@@ -577,6 +860,1093 @@ const CreateBuildPage: React.FC = () => {
                   </CardBody>
                 </Card>
               </StackItem>
+
+              {/* Wizard Form Sections */}
+              {useWizard && (
+                <>
+                  {/* Basic Manifest Information */}
+                  <StackItem>
+                    <Card>
+                      <CardBody>
+                        <Stack hasGutter>
+                          <StackItem>
+                            <Title headingLevel="h2" size="lg">
+                              Manifest Information
+                            </Title>
+                          </StackItem>
+                          <StackItem>
+                            <Grid hasGutter>
+                              <GridItem span={6}>
+                                <FormGroup
+                                  label={<PopoverLabel label="Manifest Name" popoverContent="Name identifier for your manifest" isRequired />} 
+                                  fieldId="wizard-name"
+                                >
+                                  <TextInput
+                                    id="wizard-name"
+                                    value={wizardData.name}
+                                    onChange={(_event, value) =>
+                                      setWizardData(prev => ({ ...prev, name: value }))
+                                    }
+                                    placeholder="Enter manifest name"
+                                    isRequired
+                                  />
+                                </FormGroup>
+                              </GridItem>
+                              <GridItem span={6}>
+                                <FormGroup
+                                  label={<PopoverLabel label="Version" popoverContent="Version of your manifest (optional)" />} 
+                                  fieldId="wizard-version"
+                                >
+                                  <TextInput
+                                    id="wizard-version"
+                                    value={wizardData.version}
+                                    onChange={(_event, value) =>
+                                      setWizardData(prev => ({ ...prev, version: value }))
+                                    }
+                                    placeholder="e.g., 1.0.0"
+                                  />
+                                </FormGroup>
+                              </GridItem>
+                            </Grid>
+                          </StackItem>
+                        </Stack>
+                      </CardBody>
+                    </Card>
+                  </StackItem>
+
+                  {/* Content Section */}
+                  <StackItem>
+                    <Card>
+                      <CardBody>
+                        <Stack hasGutter>
+                          <StackItem>
+                            <Title headingLevel="h2" size="lg">
+                              Content
+                            </Title>
+                          </StackItem>
+
+                          <StackItem>
+                            <FormGroup
+                              label={<PopoverLabel label="RPM Packages" popoverContent="List of RPM packages to install (one per line)" />} 
+                              fieldId="wizard-rpms"
+                            >
+                              <TextArea
+                                id="wizard-rpms"
+                                value={wizardData.content.rpms.join('\n')}
+                                onChange={(_event, value) =>
+                                  setWizardData(prev => ({
+                                    ...prev,
+                                    content: {
+                                      ...prev.content,
+                                      rpms: value.split('\n').filter(rpm => rpm.trim())
+                                    }
+                                  }))
+                                }
+                                placeholder="Enter RPM package names, one per line&#10;Example:&#10;vim&#10;git&#10;htop"
+                                rows={4}
+                              />
+                            </FormGroup>
+                          </StackItem>
+
+                          <StackItem>
+                            <FormGroup
+                              label={<PopoverLabel label="Enable Repositories" popoverContent="Enable predefined repositories (debug, devel)" />}
+                              fieldId="wizard-enable-repos"
+                            >
+                              <Stack hasGutter>
+                                <StackItem>
+                                  <Checkbox
+                                    id="enable-debug-repo"
+                                    label="debug - Enable debug repository"
+                                    isChecked={wizardData.content.enable_repos.includes('debug')}
+                                    onChange={(_event, checked) => {
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        content: {
+                                          ...prev.content,
+                                          enable_repos: checked
+                                            ? [...prev.content.enable_repos, 'debug']
+                                            : prev.content.enable_repos.filter(r => r !== 'debug')
+                                        }
+                                      }));
+                                    }}
+                                  />
+                                </StackItem>
+                                <StackItem>
+                                  <Checkbox
+                                    id="enable-devel-repo"
+                                    label="devel - Enable development repository"
+                                    isChecked={wizardData.content.enable_repos.includes('devel')}
+                                    onChange={(_event, checked) => {
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        content: {
+                                          ...prev.content,
+                                          enable_repos: checked
+                                            ? [...prev.content.enable_repos, 'devel']
+                                            : prev.content.enable_repos.filter(r => r !== 'devel')
+                                        }
+                                      }));
+                                    }}
+                                  />
+                                </StackItem>
+                              </Stack>
+                            </FormGroup>
+                          </StackItem>
+
+                          <StackItem>
+                            <FormGroup
+                              label={<PopoverLabel label="Container Images" popoverContent="Container images to embed in the image" />}
+                              fieldId="wizard-containers"
+                            >
+                              <Stack hasGutter>
+                                {wizardData.content.container_images.map((img, index) => (
+                                  <StackItem key={index}>
+                                    <Card isPlain>
+                                      <CardBody>
+                                        <Stack hasGutter>
+                                          <StackItem>
+                                            <Split hasGutter>
+                                              <SplitItem isFilled>
+                                                <Title headingLevel="h4" size="md">
+                                                  Container Image {index + 1}
+                                                </Title>
+                                              </SplitItem>
+                                              <SplitItem>
+                                                <Button
+                                                  variant="plain"
+                                                  size="sm"
+                                                  onClick={() => {
+                                                    setWizardData(prev => ({
+                                                      ...prev,
+                                                      content: {
+                                                        ...prev.content,
+                                                        container_images: prev.content.container_images.filter((_, i) => i !== index)
+                                                      }
+                                                    }));
+                                                  }}
+                                                  icon={<TrashIcon />}
+                                                />
+                                              </SplitItem>
+                                            </Split>
+                                          </StackItem>
+                                          <StackItem>
+                                            <Grid hasGutter>
+                                              <GridItem span={6}>
+                                                <FormGroup label="Source" fieldId={`container-source-${index}`} isRequired>
+                                                  <TextInput
+                                                    id={`container-source-${index}`}
+                                                    value={img.source}
+                                                    onChange={(_event, value) => {
+                                                      setWizardData(prev => ({
+                                                        ...prev,
+                                                        content: {
+                                                          ...prev.content,
+                                                          container_images: prev.content.container_images.map((c, i) => 
+                                                            i === index ? { ...c, source: value } : c
+                                                          )
+                                                        }
+                                                      }));
+                                                    }}
+                                                    placeholder="quay.io/fedora/fedora"
+                                                    isRequired
+                                                  />
+                                                </FormGroup>
+                                              </GridItem>
+                                              <GridItem span={3}>
+                                                <FormGroup label="Tag" fieldId={`container-tag-${index}`}>
+                                                  <TextInput
+                                                    id={`container-tag-${index}`}
+                                                    value={img.tag || ''}
+                                                    onChange={(_event, value) => {
+                                                      setWizardData(prev => ({
+                                                        ...prev,
+                                                        content: {
+                                                          ...prev.content,
+                                                          container_images: prev.content.container_images.map((c, i) => 
+                                                            i === index ? { ...c, tag: value || undefined } : c
+                                                          )
+                                                        }
+                                                      }));
+                                                    }}
+                                                    placeholder="latest"
+                                                  />
+                                                </FormGroup>
+                                              </GridItem>
+                                              <GridItem span={3}>
+                                                <FormGroup label="Name" fieldId={`container-name-${index}`}>
+                                                  <TextInput
+                                                    id={`container-name-${index}`}
+                                                    value={img.name || ''}
+                                                    onChange={(_event, value) => {
+                                                      setWizardData(prev => ({
+                                                        ...prev,
+                                                        content: {
+                                                          ...prev.content,
+                                                          container_images: prev.content.container_images.map((c, i) => 
+                                                            i === index ? { ...c, name: value || undefined } : c
+                                                          )
+                                                        }
+                                                      }));
+                                                    }}
+                                                    placeholder="Custom name"
+                                                  />
+                                                </FormGroup>
+                                              </GridItem>
+                                            </Grid>
+                                          </StackItem>
+                                        </Stack>
+                                      </CardBody>
+                                    </Card>
+                                  </StackItem>
+                                ))}
+                                <StackItem>
+                                  <Button
+                                    variant="link"
+                                    size="sm"
+                                    onClick={() => {
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        content: {
+                                          ...prev.content,
+                                          container_images: [...prev.content.container_images, { source: '' }]
+                                        }
+                                      }));
+                                    }}
+                                    icon={<PlusCircleIcon />}
+                                  >
+                                    Add Container Image
+                                  </Button>
+                                </StackItem>
+                              </Stack>
+                            </FormGroup>
+                          </StackItem>
+
+                          {/* Files Section */}
+                          <StackItem>
+                            <ExpandableSection
+                              toggleText="Files"
+                              isExpanded={isFilesOpen}
+                              onToggle={(_event, expanded) => setIsFilesOpen(expanded as boolean)}
+                            >
+                              <Stack hasGutter style={{ paddingTop: "16px" }}>
+                                {wizardData.content.add_files.map((file, index) => (
+                                  <StackItem key={index}>
+                                    <Card isPlain>
+                                      <CardBody>
+                                        <Stack hasGutter>
+                                          <StackItem>
+                                            <Split hasGutter>
+                                              <SplitItem isFilled>
+                                                <Title headingLevel="h4" size="md">
+                                                  Add File {index + 1}
+                                                </Title>
+                                              </SplitItem>
+                                              <SplitItem>
+                                                <Button
+                                                  variant="plain"
+                                                  size="sm"
+                                                  onClick={() => {
+                                                    setWizardData(prev => ({
+                                                      ...prev,
+                                                      content: {
+                                                        ...prev.content,
+                                                        add_files: prev.content.add_files.filter((_, i) => i !== index)
+                                                      }
+                                                    }));
+                                                  }}
+                                                  icon={<TrashIcon />}
+                                                />
+                                              </SplitItem>
+                                            </Split>
+                                          </StackItem>
+                                          <StackItem>
+                                            <Grid hasGutter>
+                                              <GridItem span={6}>
+                                                <FormGroup label="Destination Path" fieldId={`file-path-${index}`} isRequired>
+                                                  <TextInput
+                                                    id={`file-path-${index}`}
+                                                    value={file.path}
+                                                    onChange={(_event, value) => {
+                                                      setWizardData(prev => ({
+                                                        ...prev,
+                                                        content: {
+                                                          ...prev.content,
+                                                          add_files: prev.content.add_files.map((f, i) => 
+                                                            i === index ? { ...f, path: value } : f
+                                                          )
+                                                        }
+                                                      }));
+                                                    }}
+                                                    placeholder="/etc/myconfig.conf"
+                                                    isRequired
+                                                  />
+                                                </FormGroup>
+                                              </GridItem>
+                                              <GridItem span={6}>
+                                                <FormGroup label="File Type" fieldId={`file-type-${index}`}>
+                                                  <div>
+                                                    <Radio
+                                                      id={`file-type-source-${index}`}
+                                                      name={`fileType-${index}`}
+                                                      label="Local File"
+                                                      isChecked={!!file.source_path}
+                                                      onChange={() => {
+                                                        setWizardData(prev => ({
+                                                          ...prev,
+                                                          content: {
+                                                            ...prev.content,
+                                                            add_files: prev.content.add_files.map((f, i) =>
+                                                              i === index ? {
+                                                                path: f.path,
+                                                                source_path: f.source_path || ''
+                                                              } : f
+                                                            )
+                                                          }
+                                                        }));
+                                                      }}
+                                                    />
+                                                    <Radio
+                                                      id={`file-type-url-${index}`}
+                                                      name={`fileType-${index}`}
+                                                      label="URL"
+                                                      isChecked={!!file.url}
+                                                      onChange={() => {
+                                                        setWizardData(prev => ({
+                                                          ...prev,
+                                                          content: {
+                                                            ...prev.content,
+                                                            add_files: prev.content.add_files.map((f, i) =>
+                                                              i === index ? {
+                                                                path: f.path,
+                                                                url: f.url || ''
+                                                              } : f
+                                                            )
+                                                          }
+                                                        }));
+                                                      }}
+                                                    />
+                                                    <Radio
+                                                      id={`file-type-text-${index}`}
+                                                      name={`fileType-${index}`}
+                                                      label="Inline Text"
+                                                      isChecked={!!file.text}
+                                                      onChange={() => {
+                                                        setWizardData(prev => ({
+                                                          ...prev,
+                                                          content: {
+                                                            ...prev.content,
+                                                            add_files: prev.content.add_files.map((f, i) =>
+                                                              i === index ? {
+                                                                path: f.path,
+                                                                text: f.text || ''
+                                                              } : f
+                                                            )
+                                                          }
+                                                        }));
+                                                      }}
+                                                    />
+                                                    <Radio
+                                                      id={`file-type-glob-${index}`}
+                                                      name={`fileType-${index}`}
+                                                      label="Glob Pattern"
+                                                      isChecked={!!file.source_glob}
+                                                      onChange={() => {
+                                                        setWizardData(prev => ({
+                                                          ...prev,
+                                                          content: {
+                                                            ...prev.content,
+                                                            add_files: prev.content.add_files.map((f, i) =>
+                                                              i === index ? {
+                                                                path: f.path,
+                                                                source_glob: f.source_glob || '',
+                                                                preserve_path: false,
+                                                                max_files: 1000,
+                                                                allow_empty: false
+                                                              } : f
+                                                            )
+                                                          }
+                                                        }));
+                                                      }}
+                                                    />
+                                                  </div>
+                                                </FormGroup>
+                                              </GridItem>
+                                            </Grid>
+                                          </StackItem>
+
+                                          {file.source_path !== undefined && (
+                                            <StackItem>
+                                              <Stack hasGutter>
+                                                <StackItem>
+                                                  <FormGroup label="Source Type" fieldId={`file-source-type-${index}`}>
+                                                    <div>
+                                                      <Radio
+                                                        id={`file-source-path-${index}`}
+                                                        name={`sourceType-${index}`}
+                                                        label="File Path"
+                                                        isChecked={!file.source_path?.startsWith('__uploaded__')}
+                                                        onChange={() => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, source_path: '' } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                      />
+                                                      <Radio
+                                                        id={`file-source-upload-${index}`}
+                                                        name={`sourceType-${index}`}
+                                                        label="Upload File"
+                                                        isChecked={!!file.source_path?.startsWith('__uploaded__')}
+                                                        onChange={() => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, source_path: '__uploaded__' } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                      />
+                                                    </div>
+                                                  </FormGroup>
+                                                </StackItem>
+
+                                                {!file.source_path?.startsWith('__uploaded__') ? (
+                                                  <StackItem>
+                                                    <FormGroup label="Source Path" fieldId={`file-source-path-input-${index}`} isRequired>
+                                                      <TextInput
+                                                        id={`file-source-path-input-${index}`}
+                                                        value={file.source_path || ''}
+                                                        onChange={(_event, value) => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, source_path: value } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                        placeholder="./myfile.conf or /absolute/path/to/file"
+                                                        isRequired
+                                                      />
+                                                    </FormGroup>
+                                                  </StackItem>
+                                                ) : (
+                                                  <StackItem>
+                                                    <FormGroup label="Upload File" fieldId={`file-upload-${index}`} isRequired>
+                                                      <FileUpload
+                                                        id={`file-upload-${index}`}
+                                                        type="dataURL"
+                                                        value=""
+                                                        filename=""
+                                                        filenamePlaceholder="Click to browse or drag and drop"
+                                                        onFileInputChange={(_event, uploadedFile) => {
+                                                          if (uploadedFile) {
+                                                            // Add to uploaded files list
+                                                            handleFileUpload(uploadedFile);
+
+                                                            // Update wizard data to reference the uploaded file
+                                                            setWizardData(prev => ({
+                                                              ...prev,
+                                                              content: {
+                                                                ...prev.content,
+                                                                add_files: prev.content.add_files.map((f, i) =>
+                                                                  i === index ? { ...f, source_path: uploadedFile.name } : f
+                                                                )
+                                                              }
+                                                            }));
+                                                          }
+                                                        }}
+                                                        browseButtonText="Browse"
+                                                        clearButtonText="Clear"
+                                                      />
+                                                      {file.source_path && file.source_path !== '__uploaded__' && (
+                                                        <div style={{ marginTop: "8px", fontSize: "0.875rem", color: "var(--pf-v5-global--success-color--100)" }}>
+                                                          ✓ File selected: {file.source_path}
+                                                        </div>
+                                                      )}
+                                                    </FormGroup>
+                                                  </StackItem>
+                                                )}
+                                              </Stack>
+                                            </StackItem>
+                                          )}
+
+                                          {/* URL Input */}
+                                          {file.url !== undefined && (
+                                            <StackItem>
+                                              <FormGroup label="URL" fieldId={`file-url-${index}`} isRequired>
+                                                <TextInput
+                                                  id={`file-url-${index}`}
+                                                  value={file.url}
+                                                  onChange={(_event, value) => {
+                                                    setWizardData(prev => ({
+                                                      ...prev,
+                                                      content: {
+                                                        ...prev.content,
+                                                        add_files: prev.content.add_files.map((f, i) =>
+                                                          i === index ? { ...f, url: value } : f
+                                                        )
+                                                      }
+                                                    }));
+                                                  }}
+                                                  placeholder="https://example.com/myfile.conf"
+                                                  isRequired
+                                                />
+                                              </FormGroup>
+                                            </StackItem>
+                                          )}
+
+                                          {/* Text Input */}
+                                          {file.text !== undefined && (
+                                            <StackItem>
+                                              <FormGroup label="File Content" fieldId={`file-text-${index}`} isRequired>
+                                                <TextArea
+                                                  id={`file-text-${index}`}
+                                                  value={file.text}
+                                                  onChange={(_event, value) => {
+                                                    setWizardData(prev => ({
+                                                      ...prev,
+                                                      content: {
+                                                        ...prev.content,
+                                                        add_files: prev.content.add_files.map((f, i) =>
+                                                          i === index ? { ...f, text: value } : f
+                                                        )
+                                                      }
+                                                    }));
+                                                  }}
+                                                  placeholder="Enter file content here..."
+                                                  rows={6}
+                                                  isRequired
+                                                />
+                                              </FormGroup>
+                                            </StackItem>
+                                          )}
+
+                                          {/* Glob Pattern Input */}
+                                          {file.source_glob !== undefined && (
+                                            <>
+                                              <StackItem>
+                                                <FormGroup label="Source Glob Pattern" fieldId={`file-glob-${index}`} isRequired>
+                                                  <TextInput
+                                                    id={`file-glob-${index}`}
+                                                    value={file.source_glob}
+                                                    onChange={(_event, value) => {
+                                                      setWizardData(prev => ({
+                                                        ...prev,
+                                                        content: {
+                                                          ...prev.content,
+                                                          add_files: prev.content.add_files.map((f, i) =>
+                                                            i === index ? { ...f, source_glob: value } : f
+                                                          )
+                                                        }
+                                                      }));
+                                                    }}
+                                                    placeholder="./config/**/*.conf"
+                                                    isRequired
+                                                  />
+                                                </FormGroup>
+                                              </StackItem>
+                                              <StackItem>
+                                                <Grid hasGutter>
+                                                  <GridItem span={4}>
+                                                    <FormGroup fieldId={`file-preserve-path-${index}`}>
+                                                      <Checkbox
+                                                        id={`file-preserve-path-${index}`}
+                                                        label="Preserve directory structure"
+                                                        isChecked={file.preserve_path || false}
+                                                        onChange={(_event, checked) => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, preserve_path: checked } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                      />
+                                                    </FormGroup>
+                                                  </GridItem>
+                                                  <GridItem span={4}>
+                                                    <FormGroup label="Max Files" fieldId={`file-max-files-${index}`}>
+                                                      <NumberInput
+                                                        id={`file-max-files-${index}`}
+                                                        value={file.max_files || 1000}
+                                                        onMinus={() => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, max_files: Math.max(1, (f.max_files || 1000) - 1) } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                        onPlus={() => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, max_files: (f.max_files || 1000) + 1 } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                        onChange={(event) => {
+                                                          const value = parseInt((event.target as HTMLInputElement).value) || 1000;
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, max_files: Math.max(1, value) } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                        min={1}
+                                                      />
+                                                    </FormGroup>
+                                                  </GridItem>
+                                                  <GridItem span={4}>
+                                                    <FormGroup fieldId={`file-allow-empty-${index}`}>
+                                                      <Checkbox
+                                                        id={`file-allow-empty-${index}`}
+                                                        label="Allow empty matches"
+                                                        isChecked={file.allow_empty || false}
+                                                        onChange={(_event, checked) => {
+                                                          setWizardData(prev => ({
+                                                            ...prev,
+                                                            content: {
+                                                              ...prev.content,
+                                                              add_files: prev.content.add_files.map((f, i) =>
+                                                                i === index ? { ...f, allow_empty: checked } : f
+                                                              )
+                                                            }
+                                                          }));
+                                                        }}
+                                                      />
+                                                    </FormGroup>
+                                                  </GridItem>
+                                                </Grid>
+                                              </StackItem>
+                                            </>
+                                          )}
+                                        </Stack>
+                                      </CardBody>
+                                    </Card>
+                                  </StackItem>
+                                ))}
+                                <StackItem>
+                                  <Button
+                                    variant="link"
+                                    size="sm"
+                                    onClick={() => {
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        content: {
+                                          ...prev.content,
+                                          add_files: [...prev.content.add_files, { path: '', source_path: '' }]
+                                        }
+                                      }));
+                                    }}
+                                    icon={<PlusCircleIcon />}
+                                  >
+                                    Add File
+                                  </Button>
+                                </StackItem>
+
+                                {uploadedFiles.length > 0 && (
+                                  <StackItem>
+                                    <Card isPlain>
+                                      <CardBody>
+                                        <Stack hasGutter>
+                                          <StackItem>
+                                            <Title headingLevel="h4" size="md">
+                                              Available Uploaded Files
+                                            </Title>
+                                          </StackItem>
+                                          <StackItem>
+                                            <p style={{ fontSize: "0.875rem", color: "var(--pf-v5-global--Color--200)" }}>
+                                              These files are uploaded and can be referenced in your file entries above.
+                                            </p>
+                                          </StackItem>
+                                          <StackItem>
+                                            <Stack hasGutter>
+                                              {uploadedFiles.map((uploadedFile) => {
+                                                const isReferenced = wizardData.content.add_files.some(f => f.source_path === uploadedFile.name);
+                                                return (
+                                                  <StackItem key={uploadedFile.id}>
+                                                    <div style={{
+                                                      display: 'flex',
+                                                      alignItems: 'center',
+                                                      padding: '8px',
+                                                      border: '1px solid var(--pf-v5-global--BorderColor--100)',
+                                                      borderRadius: '4px',
+                                                      backgroundColor: isReferenced ? 'var(--pf-v5-global--success-color--50)' : 'transparent'
+                                                    }}>
+                                                      <span style={{ flex: 1 }}>
+                                                        <strong>{uploadedFile.name}</strong>
+                                                        <span style={{ marginLeft: '8px', fontSize: '0.875rem', color: 'var(--pf-v5-global--Color--200)' }}>
+                                                          ({(uploadedFile.file.size / 1024).toFixed(1)} KB)
+                                                        </span>
+                                                        {isReferenced && (
+                                                          <Badge style={{ marginLeft: '8px' }}>Referenced</Badge>
+                                                        )}
+                                                      </span>
+                                                    </div>
+                                                  </StackItem>
+                                                );
+                                              })}
+                                            </Stack>
+                                          </StackItem>
+                                        </Stack>
+                                      </CardBody>
+                                    </Card>
+                                  </StackItem>
+                                )}
+                              </Stack>
+                            </ExpandableSection>
+                          </StackItem>
+
+                          <StackItem>
+                            <ExpandableSection
+                              toggleText="Systemd Services"
+                              isExpanded={isSystemdOpen}
+                              onToggle={(_event, expanded) => setIsSystemdOpen(expanded as boolean)}
+                            >
+                              <Grid hasGutter style={{ paddingTop: "16px" }}>
+                                <GridItem span={6}>
+                                  <FormGroup 
+                                    label={<PopoverLabel label="Enabled Services" popoverContent="Systemd services to enable (one per line)" />}
+                                    fieldId="wizard-enabled-services"
+                                  >
+                                    <TextArea
+                                      id="wizard-enabled-services"
+                                      value={wizardData.content.systemd?.enabled_services?.join('\n') || ''}
+                                      onChange={(_event, value) =>
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          content: {
+                                            ...prev.content,
+                                            systemd: {
+                                              ...prev.content.systemd,
+                                              enabled_services: value.split('\n').filter(s => s.trim())
+                                            }
+                                          }
+                                        }))
+                                      }
+                                      placeholder="service1.service&#10;service2.service"
+                                      rows={4}
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                                <GridItem span={6}>
+                                  <FormGroup
+                                    label={<PopoverLabel label="Disabled Services" popoverContent="Systemd services to disable (one per line)" />}
+                                    fieldId="wizard-disabled-services"
+                                  >
+                                    <TextArea
+                                      id="wizard-disabled-services"
+                                      value={wizardData.content.systemd?.disabled_services?.join('\n') || ''}
+                                      onChange={(_event, value) =>
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          content: {
+                                            ...prev.content,
+                                            systemd: {
+                                              ...prev.content.systemd,
+                                              disabled_services: value.split('\n').filter(s => s.trim())
+                                            }
+                                          }
+                                        }))
+                                      }
+                                      placeholder="service3.service&#10;service4.service"
+                                      rows={4}
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                              </Grid>
+                            </ExpandableSection>
+                          </StackItem>
+                        </Stack>
+                      </CardBody>
+                    </Card>
+                  </StackItem>
+
+                  {/* Network Configuration */}
+                  <StackItem>
+                    <Card>
+                      <CardBody>
+                        <Stack hasGutter>
+                          <StackItem>
+                            <Title headingLevel="h2" size="lg">
+                              Network Configuration
+                            </Title>
+                          </StackItem>
+                          <StackItem>
+                            <FormGroup label="Network Type" fieldId="network-type">
+                              <div>
+                                <Radio
+                                  id="network-dynamic"
+                                  name="networkType"
+                                  label="Dynamic (DHCP)"
+                                  isChecked={!wizardData.network || !!wizardData.network.dynamic}
+                                  onChange={() => {
+                                    setWizardData(prev => ({
+                                      ...prev,
+                                      network: { dynamic: {} }
+                                    }));
+                                  }}
+                                />
+                                <Radio
+                                  id="network-static"
+                                  name="networkType"
+                                  label="Static IP"
+                                  isChecked={!!wizardData.network?.static}
+                                  onChange={() => {
+                                    setWizardData(prev => ({
+                                      ...prev,
+                                      network: { 
+                                        static: {
+                                          ip: '',
+                                          ip_prefixlen: 24,
+                                          gateway: '',
+                                          dns: ''
+                                        }
+                                      }
+                                    }));
+                                  }}
+                                />
+                              </div>
+                            </FormGroup>
+                          </StackItem>
+                          {wizardData.network?.static && (
+                            <StackItem>
+                              <Grid hasGutter>
+                                <GridItem span={3}>
+                                  <FormGroup label="IP Address" fieldId="static-ip" isRequired>
+                                    <TextInput
+                                      id="static-ip"
+                                      value={wizardData.network.static.ip}
+                                      onChange={(_event, value) => {
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              ip: value
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      placeholder="192.168.1.100"
+                                      isRequired
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                                <GridItem span={3}>
+                                  <FormGroup label="Prefix Length" fieldId="static-prefixlen" isRequired>
+                                    <NumberInput
+                                      id="static-prefixlen"
+                                      value={wizardData.network.static.ip_prefixlen}
+                                      onMinus={() => {
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              ip_prefixlen: Math.max(1, prev.network!.static!.ip_prefixlen - 1)
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      onPlus={() => {
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              ip_prefixlen: Math.min(32, prev.network!.static!.ip_prefixlen + 1)
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      onChange={(event) => {
+                                        const value = parseInt((event.target as HTMLInputElement).value) || 24;
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              ip_prefixlen: Math.min(32, Math.max(1, value))
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      min={1}
+                                      max={32}
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                                <GridItem span={3}>
+                                  <FormGroup label="Gateway" fieldId="static-gateway" isRequired>
+                                    <TextInput
+                                      id="static-gateway"
+                                      value={wizardData.network.static.gateway}
+                                      onChange={(_event, value) => {
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              gateway: value
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      placeholder="192.168.1.1"
+                                      isRequired
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                                <GridItem span={3}>
+                                  <FormGroup label="DNS" fieldId="static-dns" isRequired>
+                                    <TextInput
+                                      id="static-dns"
+                                      value={wizardData.network.static.dns}
+                                      onChange={(_event, value) => {
+                                        setWizardData(prev => ({
+                                          ...prev,
+                                          network: {
+                                            ...prev.network,
+                                            static: {
+                                              ...prev.network!.static!,
+                                              dns: value
+                                            }
+                                          }
+                                        }));
+                                      }}
+                                      placeholder="8.8.8.8"
+                                      isRequired
+                                    />
+                                  </FormGroup>
+                                </GridItem>
+                              </Grid>
+                            </StackItem>
+                          )}
+                        </Stack>
+                      </CardBody>
+                    </Card>
+                  </StackItem>
+
+                  {/* Image Configuration */}
+                  <StackItem>
+                    <Card>
+                      <CardBody>
+                        <Stack hasGutter>
+                          <StackItem>
+                            <Title headingLevel="h2" size="lg">
+                              Image Configuration
+                            </Title>
+                          </StackItem>
+                          <StackItem>
+                            <Grid hasGutter>
+                              <GridItem span={4}>
+                                <FormGroup 
+                                  label={<PopoverLabel label="Image Size" popoverContent="Total size of the image (e.g., 8 GB, 4 GiB)" />}
+                                  fieldId="wizard-image-size"
+                                >
+                                  <TextInput
+                                    id="wizard-image-size"
+                                    value={wizardData.image?.image_size || ''}
+                                    onChange={(_event, value) =>
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        image: {
+                                          ...prev.image,
+                                          image_size: value || undefined
+                                        }
+                                      }))
+                                    }
+                                    placeholder="8 GB"
+                                  />
+                                </FormGroup>
+                              </GridItem>
+                              <GridItem span={4}>
+                                <FormGroup 
+                                  label={<PopoverLabel label="SELinux Mode" popoverContent="SELinux enforcement mode" />}
+                                  fieldId="wizard-selinux-mode"
+                                >
+                                  <TextInput
+                                    id="wizard-selinux-mode"
+                                    value={wizardData.image?.selinux_mode || ''}
+                                    onChange={(_event, value) =>
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        image: {
+                                          ...prev.image,
+                                          selinux_mode: value as "enforcing" | "permissive" || undefined
+                                        }
+                                      }))
+                                    }
+                                    placeholder="enforcing"
+                                    list="selinux-mode-options"
+                                  />
+                                  <datalist id="selinux-mode-options">
+                                    <option value="enforcing" />
+                                    <option value="permissive" />
+                                  </datalist>
+                                </FormGroup>
+                              </GridItem>
+                              <GridItem span={4}>
+                                <FormGroup 
+                                  label={<PopoverLabel label="Hostname" popoverContent="Network hostname for the system" />}
+                                  fieldId="wizard-hostname"
+                                >
+                                  <TextInput
+                                    id="wizard-hostname"
+                                    value={wizardData.image?.hostname || ''}
+                                    onChange={(_event, value) =>
+                                      setWizardData(prev => ({
+                                        ...prev,
+                                        image: {
+                                          ...prev.image,
+                                          hostname: value || undefined
+                                        }
+                                      }))
+                                    }
+                                    placeholder="my-system"
+                                  />
+                                </FormGroup>
+                              </GridItem>
+                            </Grid>
+                          </StackItem>
+                        </Stack>
+                      </CardBody>
+                    </Card>
+                  </StackItem>
+                </>
+              )}
 
               {/* Build Configuration */}
               <StackItem>
@@ -774,7 +2144,6 @@ const CreateBuildPage: React.FC = () => {
                                           handleRegistryCredentialsChange("enabled", checked)
                                         }
                                       />
-                                      
                                       {formData.registryCredentials.enabled && (
                                         <div style={{ marginTop: "16px", padding: "16px", border: "1px solid var(--pf-v5-global--BorderColor--100)", borderRadius: "4px" }}>
                                           <Stack hasGutter>
@@ -877,9 +2246,9 @@ const CreateBuildPage: React.FC = () => {
 
                                             {formData.registryCredentials.authType === "docker-config" && (
                                               <StackItem>
-                                                <FormGroup 
-                                                  label="Docker Config JSON" 
-                                                  fieldId="dockerConfig" 
+                                                <FormGroup
+                                                  label="Docker Config JSON"
+                                                  fieldId="dockerConfig"
                                                   isRequired
                                                 >
                                                   <TextArea
