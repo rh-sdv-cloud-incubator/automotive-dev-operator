@@ -1,7 +1,7 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: ado-webui
+  name: webui
   namespace: automotive-dev-operator-system
   labels:
     app.kubernetes.io/name: webui
