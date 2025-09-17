@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +33,7 @@ import (
 
 type APIServer struct {
 	server *http.Server
+	router *gin.Engine
 	addr   string
 	log    logr.Logger
 }
@@ -42,17 +43,17 @@ var embeddedOpenAPI []byte
 
 type ctxKeyReqID struct{}
 
-// NewAPIServer creates a new API server runnable
-func NewAPIServer(addr string) *APIServer {
-	a := &APIServer{addr: addr}
-	a.log = logr.Discard()
-	a.server = &http.Server{Addr: addr, Handler: a.createHandler()}
-	return a
-}
+// NewAPIServer creates a new API server
+func NewAPIServer(addr string, logger logr.Logger) *APIServer {
+	// Gin mode should be controlled by environment, not by which constructor is used
+	if os.Getenv("GIN_MODE") == "" {
+		// Default to release mode for production safety
+		gin.SetMode(gin.ReleaseMode)
+	}
 
-func NewAPIServerWithLogger(addr string, logger logr.Logger) *APIServer {
 	a := &APIServer{addr: addr, log: logger}
-	a.server = &http.Server{Addr: addr, Handler: a.createHandler()}
+	a.router = a.createRouter()
+	a.server = &http.Server{Addr: addr, Handler: a.router}
 	return a
 }
 
@@ -80,184 +81,189 @@ func (a *APIServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *APIServer) createHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/yaml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(embeddedOpenAPI)
-	})
-	mux.HandleFunc("/v1/builds", a.handleBuilds)
-	mux.HandleFunc("/v1/builds/", a.handleBuildByName)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// attach a request ID for correlation
+func (a *APIServer) createRouter() *gin.Engine {
+	router := gin.New()
+	router.Use(gin.Recovery())
+
+	// Add request ID and logging middleware
+	router.Use(func(c *gin.Context) {
 		reqID := uuid.New().String()
-		ctx := context.WithValue(r.Context(), ctxKeyReqID{}, reqID)
-		a.log.Info("http request", "method", r.Method, "path", r.URL.Path, "reqID", reqID)
-		mux.ServeHTTP(w, r.WithContext(ctx))
+		c.Set("reqID", reqID)
+		a.log.Info("http request", "method", c.Request.Method, "path", c.Request.URL.Path, "reqID", reqID)
+		c.Next()
 	})
+
+	v1 := router.Group("/v1")
+	{
+		v1.GET("/healthz", func(c *gin.Context) {
+			c.String(http.StatusOK, "ok")
+		})
+
+		v1.GET("/openapi.yaml", func(c *gin.Context) {
+			c.Data(http.StatusOK, "application/yaml", embeddedOpenAPI)
+		})
+
+		// Builds endpoints with authentication middleware
+		buildsGroup := v1.Group("/builds")
+		buildsGroup.Use(a.authMiddleware())
+		{
+			buildsGroup.POST("", a.handleCreateBuild)
+			buildsGroup.GET("", a.handleListBuilds)
+			buildsGroup.GET("/:name", a.handleGetBuild)
+			buildsGroup.GET("/:name/logs", a.handleStreamLogs)
+			buildsGroup.GET("/:name/artifacts", a.handleListArtifacts)
+			buildsGroup.GET("/:name/artifacts/:file", a.handleStreamArtifactPart)
+			buildsGroup.GET("/:name/artifact/:filename", a.handleStreamArtifactByFilename)
+			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
+			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
+		}
+	}
+
+	return router
 }
 
 // StartServer starts the REST API server on the given address in a goroutine and returns the server
-func StartServer(addr string) (*http.Server, error) {
-	api := NewAPIServer(addr)
+func StartServer(addr string, logger logr.Logger) (*http.Server, error) {
+	api := NewAPIServer(addr, logger)
 	server := api.server
 	go func() {
 		if err := api.Start(context.Background()); err != nil {
-			// no logger available here
+			logger.Error(err, "failed to start build-api server")
 		}
 	}()
 	return server, nil
 }
 
-func (a *APIServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
-	// Validate authentication
-	if !isAuthenticated(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPost:
-		a.log.Info("create build")
-		createBuild(w, r)
-	case http.MethodGet:
-		a.log.Info("list builds")
-		listBuilds(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+// authMiddleware provides authentication middleware for Gin
+func (a *APIServer) authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isAuthenticated(c) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 
-func (a *APIServer) handleBuildByName(w http.ResponseWriter, r *http.Request) {
-	// Validate authentication (except for healthz)
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 3 {
-		http.NotFound(w, r)
-		return
-	}
-	name := parts[2]
-
-	// Skip auth for healthz endpoint
-	if !(len(parts) == 2 && parts[1] == "healthz") {
-		if !isAuthenticated(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		if len(parts) == 4 {
-			switch parts[3] {
-			case "logs":
-				a.log.Info("logs requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-				streamLogs(w, r, name)
-				return
-			case "artifacts":
-				a.log.Info("artifacts list requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-				a.listArtifacts(w, r, name)
-				return
-			case "template":
-				a.log.Info("template requested", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-				getBuildTemplate(w, r, name)
-				return
-			}
-		}
-		if len(parts) == 5 && parts[3] == "artifacts" {
-			file := parts[4]
-			a.log.Info("artifact item requested", "build", name, "file", file, "reqID", r.Context().Value(ctxKeyReqID{}))
-			a.streamArtifactPart(w, r, name, file)
-			return
-		}
-		if len(parts) == 5 && parts[3] == "artifact" {
-			filename := parts[4]
-			a.log.Info("artifact by filename requested", "build", name, "filename", filename, "reqID", r.Context().Value(ctxKeyReqID{}))
-			a.streamArtifactByFilename(w, r, name, filename)
-			return
-		}
-		a.log.Info("get build", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-		getBuild(w, r, name)
-	case http.MethodPost:
-		if len(parts) == 4 && parts[3] == "uploads" {
-			a.log.Info("uploads", "build", name, "reqID", r.Context().Value(ctxKeyReqID{}))
-			uploadFiles(w, r, name)
-			return
-		}
-		http.NotFound(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+func (a *APIServer) handleCreateBuild(c *gin.Context) {
+	a.log.Info("create build", "reqID", c.GetString("reqID"))
+	createBuild(c)
 }
 
-func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
+func (a *APIServer) handleListBuilds(c *gin.Context) {
+	a.log.Info("list builds", "reqID", c.GetString("reqID"))
+	listBuilds(c)
+}
+
+func (a *APIServer) handleGetBuild(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("get build", "build", name, "reqID", c.GetString("reqID"))
+	getBuild(c, name)
+}
+
+func (a *APIServer) handleStreamLogs(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("logs requested", "build", name, "reqID", c.GetString("reqID"))
+	streamLogs(c, name)
+}
+
+func (a *APIServer) handleListArtifacts(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("artifacts list requested", "build", name, "reqID", c.GetString("reqID"))
+	a.listArtifacts(c, name)
+}
+
+func (a *APIServer) handleStreamArtifactPart(c *gin.Context) {
+	name := c.Param("name")
+	file := c.Param("file")
+	a.log.Info("artifact item requested", "build", name, "file", file, "reqID", c.GetString("reqID"))
+	a.streamArtifactPart(c, name, file)
+}
+
+func (a *APIServer) handleStreamArtifactByFilename(c *gin.Context) {
+	name := c.Param("name")
+	filename := c.Param("filename")
+	a.log.Info("artifact by filename requested", "build", name, "filename", filename, "reqID", c.GetString("reqID"))
+	a.streamArtifactByFilename(c, name, filename)
+}
+
+func (a *APIServer) handleGetBuildTemplate(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("template requested", "build", name, "reqID", c.GetString("reqID"))
+	getBuildTemplate(c, name)
+}
+
+func (a *APIServer) handleUploadFiles(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("uploads", "build", name, "reqID", c.GetString("reqID"))
+	uploadFiles(c, name)
+}
+
+func streamLogs(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	var podName string
 
 	ib := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	tr := strings.TrimSpace(ib.Status.TaskRunName)
 	if tr == "" {
-		http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
 		return
 	}
-	restCfg, err := getRESTConfigFromRequest(r)
+	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	quickCS, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	pods, err := quickCS.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/taskRun=" + tr})
 	if err != nil || len(pods.Items) == 0 {
-		http.Error(w, "logs not available yet", http.StatusServiceUnavailable)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
 		return
 	}
 	podName = pods.Items[0].Name
 
-	cfg, err := getRESTConfigFromRequest(r)
+	cfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	// Set up streaming response
+	c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	c.Writer.Header().Set("Transfer-Encoding", "chunked")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
 
-	_, _ = w.Write([]byte("Waiting for logs...\n"))
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
+	c.Writer.WriteHeader(http.StatusOK)
+	_, _ = c.Writer.Write([]byte("Waiting for logs...\n"))
+	c.Writer.Flush()
 
 	var hadStream bool
 	streamed := make(map[string]bool)
@@ -271,7 +277,8 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 
 		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			fmt.Fprintf(c.Writer, "\n[Error: %v]\n", err)
+			c.Writer.Flush()
 			return
 		}
 
@@ -302,16 +309,12 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 			}
 
 			if !hadStream {
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
+				c.Writer.Flush()
 			}
 			hadStream = true
 
-			_, _ = w.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+			_, _ = c.Writer.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
+			c.Writer.Flush()
 			// Stream with proper error handling and context cancellation
 			func() {
 				defer stream.Close()
@@ -327,22 +330,18 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 
 					n, err := stream.Read(buf)
 					if n > 0 {
-						if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+						if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
 							return
 						}
-						if f, ok := w.(http.Flusher); ok {
-							f.Flush()
-						}
+						c.Writer.Flush()
 					}
 
 					if err != nil {
 						if err != io.EOF {
 							var errMsg []byte
 							errMsg = fmt.Appendf(errMsg, "\n[Stream error: %v]\n", err)
-							_, _ = w.Write(errMsg)
-							if f, ok := w.(http.Flusher); ok {
-								f.Flush()
-							}
+							_, _ = c.Writer.Write(errMsg)
+							c.Writer.Flush()
 						}
 						return
 					}
@@ -366,20 +365,20 @@ func streamLogs(w http.ResponseWriter, r *http.Request, name string) {
 		time.Sleep(2 * time.Second)
 		if !hadStream {
 			// keep-alive to prevent router/proxy 504s while waiting
-			_, _ = w.Write([]byte("."))
-			if f, ok := w.(http.Flusher); ok {
+			_, _ = c.Writer.Write([]byte("."))
+			if f, ok := c.Writer.(http.Flusher); ok {
 				f.Flush()
 			}
 		}
 	}
 
 	if !hadStream {
-		http.Error(w, "logs unavailable: "+strings.Join(lastErrs, "; "), http.StatusServiceUnavailable)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs unavailable: " + strings.Join(lastErrs, "; ")})
 		return
 	}
 
-	_, _ = w.Write([]byte("\n[Log streaming completed]\n"))
-	if f, ok := w.(http.Flusher); ok {
+	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
+	if f, ok := c.Writer.(http.Flusher); ok {
 		f.Flush()
 	}
 }
@@ -456,18 +455,17 @@ func createRegistrySecret(ctx context.Context, k8sClient client.Client, namespac
 	return secretName, nil
 }
 
-func createBuild(w http.ResponseWriter, r *http.Request) {
+func createBuild(c *gin.Context) {
 	var req BuildRequest
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid JSON: %v", err)})
 		return
 	}
 
 	needsUpload := strings.Contains(req.Manifest, "source_path")
 
 	if req.Name == "" || req.Manifest == "" {
-		http.Error(w, "name and manifest are required", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name and manifest are required"})
 		return
 	}
 
@@ -491,28 +489,28 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		req.Compression = "gzip"
 	}
 	if req.Compression != "lz4" && req.Compression != "gzip" {
-		http.Error(w, "invalid compression: must be lz4 or gzip", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid compression: must be lz4 or gzip"})
 		return
 	}
 
 	if !req.Distro.IsValid() {
-		http.Error(w, "distro cannot be empty", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "distro cannot be empty"})
 		return
 	}
 	if !req.Target.IsValid() {
-		http.Error(w, "target cannot be empty", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target cannot be empty"})
 		return
 	}
 	if !req.Architecture.IsValid() {
-		http.Error(w, "architecture cannot be empty", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "architecture cannot be empty"})
 		return
 	}
 	if !req.ExportFormat.IsValid() {
-		http.Error(w, "exportFormat cannot be empty", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exportFormat cannot be empty"})
 		return
 	}
 	if !req.Mode.IsValid() {
-		http.Error(w, "mode cannot be empty", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode cannot be empty"})
 		return
 	}
 	if req.AutomotiveImageBuilder == "" {
@@ -522,23 +520,23 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		req.ManifestFileName = "manifest.aib.yml"
 	}
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	namespace := resolveNamespace()
 
-	requestedBy := resolveRequester(r)
+	requestedBy := resolveRequester(c)
 
 	existing := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
-		http.Error(w, fmt.Sprintf("ImageBuild %s already exists", req.Name), http.StatusConflict)
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ImageBuild %s already exists", req.Name)})
 		return
 	} else if !k8serrors.IsNotFound(err) {
-		http.Error(w, fmt.Sprintf("error checking existing build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error checking existing build: %v", err)})
 		return
 	}
 
@@ -569,7 +567,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		Data: cmData,
 	}
 	if err := k8sClient.Create(ctx, cm); err != nil {
-		http.Error(w, fmt.Sprintf("error creating manifest ConfigMap: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating manifest ConfigMap: %v", err)})
 		return
 	}
 
@@ -596,7 +594,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
 		secretName, err := createRegistrySecret(ctx, k8sClient, namespace, req.Name, req.RegistryCredentials)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("error creating registry secret: %v", err), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating registry secret: %v", err)})
 			return
 		}
 		envSecretRef = secretName
@@ -629,7 +627,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
-		http.Error(w, fmt.Sprintf("error creating ImageBuild: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ImageBuild: %v", err)})
 		return
 	}
 
@@ -643,7 +641,7 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusAccepted, BuildResponse{
+	writeJSON(c, http.StatusAccepted, BuildResponse{
 		Name:        req.Name,
 		Phase:       "Building",
 		Message:     "Build triggered",
@@ -651,19 +649,19 @@ func createBuild(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func listBuilds(w http.ResponseWriter, r *http.Request) {
+func listBuilds(c *gin.Context) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	list := &automotivev1.ImageBuildList{}
 	if err := k8sClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
-		http.Error(w, fmt.Sprintf("error listing builds: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing builds: %v", err)})
 		return
 	}
 
@@ -686,29 +684,29 @@ func listBuilds(w http.ResponseWriter, r *http.Request) {
 			CompletionTime: compStr,
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(c, http.StatusOK, resp)
 }
 
-func getBuild(w http.ResponseWriter, r *http.Request, name string) {
+func getBuild(c *gin.Context, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	build := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, BuildResponse{
+	writeJSON(c, http.StatusOK, BuildResponse{
 		Name:             build.Name,
 		Phase:            build.Status.Phase,
 		Message:          build.Status.Message,
@@ -731,28 +729,28 @@ func getBuild(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 // getBuildTemplate returns a BuildRequest-like struct representing the inputs that produced a given build
-func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
+func getBuildTemplate(c *gin.Context, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	build := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
 	cm := &corev1.ConfigMap{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: build.Spec.ManifestConfigMap, Namespace: namespace}, cm); err != nil {
-		http.Error(w, fmt.Sprintf("error fetching manifest config: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching manifest config: %v", err)})
 		return
 	}
 
@@ -794,7 +792,7 @@ func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, BuildTemplateResponse{
+	writeJSON(c, http.StatusOK, BuildTemplateResponse{
 		BuildRequest: BuildRequest{
 			Name:                   build.Name,
 			Manifest:               manifest,
@@ -815,34 +813,34 @@ func getBuildTemplate(w http.ResponseWriter, r *http.Request, name string) {
 	})
 }
 
-func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
+func uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 	build := &automotivev1.ImageBuild{}
-	if err := k8sClient.Get(r.Context(), types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+	if err := k8sClient.Get(c.Request.Context(), types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
 	// Find upload pod
 	podList := &corev1.PodList{}
-	if err := k8sClient.List(r.Context(), podList,
+	if err := k8sClient.List(c.Request.Context(), podList,
 		client.InNamespace(namespace),
 		client.MatchingLabels{
 			"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
 			"app.kubernetes.io/name":                          "upload-pod",
 		},
 	); err != nil {
-		http.Error(w, fmt.Sprintf("error listing upload pods: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing upload pods: %v", err)})
 		return
 	}
 	var uploadPod *corev1.Pod
@@ -854,19 +852,19 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		}
 	}
 	if uploadPod == nil {
-		http.Error(w, "upload pod not ready", http.StatusServiceUnavailable)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upload pod not ready"})
 		return
 	}
 
-	reader, err := r.MultipartReader()
+	reader, err := c.Request.MultipartReader()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("invalid multipart: %v", err), http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid multipart: %v", err)})
 		return
 	}
 
-	restCfg, err := getRESTConfigFromRequest(r)
+	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
 		return
 	}
 
@@ -876,7 +874,7 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 			break
 		}
 		if err != nil {
-			http.Error(w, fmt.Sprintf("read part: %v", err), http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("read part: %v", err)})
 			return
 		}
 		if part.FormName() != "file" {
@@ -884,19 +882,19 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		}
 		dest := strings.TrimSpace(part.FileName())
 		if dest == "" {
-			http.Error(w, "missing destination filename", http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing destination filename"})
 			return
 		}
 
 		cleanDest := path.Clean(dest)
 		if strings.HasPrefix(cleanDest, "..") || strings.HasPrefix(cleanDest, "/") {
-			http.Error(w, fmt.Sprintf("invalid destination path: %s", dest), http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid destination path: %s", dest)})
 			return
 		}
 
 		tmp, err := os.CreateTemp("", "upload-*")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
@@ -907,12 +905,12 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		}()
 
 		if _, err := io.Copy(tmp, part); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
 		if err := copyFileToPod(restCfg, namespace, uploadPod.Name, uploadPod.Spec.Containers[0].Name, tmpName, "/workspace/shared/"+cleanDest); err != nil {
-			http.Error(w, fmt.Sprintf("stream to pod failed: %v", err), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("stream to pod failed: %v", err)})
 			return
 		}
 	}
@@ -923,35 +921,35 @@ func uploadFiles(w http.ResponseWriter, r *http.Request, name string) {
 		patched.Annotations = map[string]string{}
 	}
 	patched.Annotations["automotive.sdv.cloud.redhat.com/uploads-complete"] = "true"
-	if err := k8sClient.Patch(r.Context(), patched, client.MergeFrom(original)); err != nil {
-		http.Error(w, fmt.Sprintf("mark complete failed: %v", err), http.StatusInternalServerError)
+	if err := k8sClient.Patch(c.Request.Context(), patched, client.MergeFrom(original)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("mark complete failed: %v", err)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(c, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name string) {
+func (a *APIServer) listArtifacts(c *gin.Context, name string) {
 	namespace := resolveNamespace()
-	ctx := r.Context()
+	ctx := c.Request.Context()
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
 	build := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
 	if build.Status.Phase != "Completed" {
-		http.Error(w, "artifact not available until build completes", http.StatusConflict)
+		c.JSON(http.StatusConflict, gin.H{"error": "artifact not available until build completes"})
 		return
 	}
 
@@ -979,7 +977,7 @@ func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name s
 				"app.kubernetes.io/name":                          "artifact-pod",
 				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
 			}); err != nil {
-			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing artifact pods: %v", err)})
 			return
 		}
 		for i := range podList.Items {
@@ -1000,20 +998,20 @@ func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name s
 			break
 		}
 		if time.Now().After(deadline) {
-			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact pod not ready"})
 			return
 		}
 		time.Sleep(2 * time.Second)
 	}
 
-	restCfg, err := getRESTConfigFromRequest(r)
+	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
 		return
 	}
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("clientset: %v", err)})
 		return
 	}
 
@@ -1031,18 +1029,18 @@ func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name s
 		}, kscheme.ParameterCodec)
 	listExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, listReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (list): %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("executor (list): %v", err)})
 		return
 	}
 	var out strings.Builder
 	if err := listExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: io.Discard}); err != nil {
-		http.Error(w, fmt.Sprintf("list stream: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("list stream: %v", err)})
 		return
 	}
 	trim := strings.TrimSpace(out.String())
 	if trim == "" || trim == "MISSING" {
 		// No parts available
-		writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		writeJSON(c, http.StatusOK, map[string]any{"items": []any{}})
 		return
 	}
 	lines := strings.Split(trim, "\n")
@@ -1058,36 +1056,36 @@ func (a *APIServer) listArtifacts(w http.ResponseWriter, r *http.Request, name s
 		}
 		items = append(items, item{Name: p[0], SizeBytes: strings.TrimSpace(p[1])})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(c, http.StatusOK, map[string]any{"items": items})
 }
 
-func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, name, file string) {
+func (a *APIServer) streamArtifactPart(c *gin.Context, name, file string) {
 	namespace := resolveNamespace()
-	ctx := r.Context()
+	ctx := c.Request.Context()
 
 	if strings.Contains(file, "/") || strings.Contains(file, "..") || strings.TrimSpace(file) == "" {
-		http.Error(w, "invalid file name", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file name"})
 		return
 	}
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
 	build := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
 	if build.Status.Phase != "Completed" {
-		http.Error(w, "artifact not available until build completes", http.StatusConflict)
+		c.JSON(http.StatusConflict, gin.H{"error": "artifact not available until build completes"})
 		return
 	}
 
@@ -1115,7 +1113,7 @@ func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, n
 				"app.kubernetes.io/name":                          "artifact-pod",
 				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
 			}); err != nil {
-			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing artifact pods: %v", err)})
 			return
 		}
 		for i := range podList.Items {
@@ -1136,20 +1134,20 @@ func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, n
 			break
 		}
 		if time.Now().After(deadline) {
-			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact pod not ready"})
 			return
 		}
 		time.Sleep(2 * time.Second)
 	}
 
-	restCfg, err := getRESTConfigFromRequest(r)
+	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
 		return
 	}
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("clientset: %v", err)})
 		return
 	}
 
@@ -1168,17 +1166,17 @@ func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, n
 		}, kscheme.ParameterCodec)
 	sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (size): %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("executor (size): %v", err)})
 		return
 	}
 	var sizeStdout strings.Builder
 	if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
-		http.Error(w, fmt.Sprintf("size stream: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("size stream: %v", err)})
 		return
 	}
 	sz := strings.TrimSpace(sizeStdout.String())
 	if sz == "" || sz == "MISSING" {
-		http.Error(w, "artifact item not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact item not found"})
 		return
 	}
 
@@ -1195,50 +1193,50 @@ func (a *APIServer) streamArtifactPart(w http.ResponseWriter, r *http.Request, n
 		}, kscheme.ParameterCodec)
 	streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("executor (stream): %v", err)})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file))
-	w.Header().Set("Content-Length", sz)
-	w.Header().Set("X-AIB-Artifact-Type", "file")
-	w.Header().Set("X-AIB-Compression", "gzip")
-	if f, ok := w.(http.Flusher); ok {
+	c.Writer.Header().Set("Content-Type", "application/gzip")
+	c.Writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file))
+	c.Writer.Header().Set("Content-Length", sz)
+	c.Writer.Header().Set("X-AIB-Artifact-Type", "file")
+	c.Writer.Header().Set("X-AIB-Compression", "gzip")
+	if f, ok := c.Writer.(http.Flusher); ok {
 		f.Flush()
 	}
 
-	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: c.Writer, Stderr: io.Discard})
 }
 
-// streamArtifactByFilename streams the specified artifact file from the artifact pod to the client over HTTP.
-func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Request, name, filename string) {
+// streamArtifactByFilename streams the specified artifact file from the artifact pod to the client over HTTP
+func (a *APIServer) streamArtifactByFilename(c *gin.Context, name, filename string) {
 	namespace := resolveNamespace()
-	ctx := r.Context()
+	ctx := c.Request.Context()
 
 	if strings.Contains(filename, "/") || strings.Contains(filename, "..") || strings.TrimSpace(filename) == "" {
-		http.Error(w, "invalid file name", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file name"})
 		return
 	}
 
-	k8sClient, err := getClientFromRequest(r)
+	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("k8s client error: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return
 	}
 
 	build := &automotivev1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
 		if k8serrors.IsNotFound(err) {
-			http.Error(w, "not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		http.Error(w, fmt.Sprintf("error fetching build: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
 	}
 
 	if build.Status.Phase != "Completed" {
-		http.Error(w, "artifact not available until build completes", http.StatusConflict)
+		c.JSON(http.StatusConflict, gin.H{"error": "artifact not available until build completes"})
 		return
 	}
 
@@ -1258,19 +1256,19 @@ func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Requ
 	}
 
 	if !allowed {
-		http.Error(w, "file not allowed", http.StatusForbidden)
+		c.JSON(http.StatusForbidden, gin.H{"error": "file not allowed"})
 		return
 	}
 
 	// Get REST config and clientset for pod operations
-	restCfg, err := getRESTConfigFromRequest(r)
+	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("rest config: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
 		return
 	}
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("clientset: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("clientset: %v", err)})
 		return
 	}
 
@@ -1285,7 +1283,7 @@ func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Requ
 				"app.kubernetes.io/name":                          "artifact-pod",
 				"automotive.sdv.cloud.redhat.com/imagebuild-name": name,
 			}); err != nil {
-			http.Error(w, fmt.Sprintf("error listing artifact pods: %v", err), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing artifact pods: %v", err)})
 			return
 		}
 
@@ -1308,7 +1306,7 @@ func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Requ
 			break
 		}
 		if time.Now().After(deadline) {
-			http.Error(w, "artifact pod not ready", http.StatusServiceUnavailable)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact pod not ready"})
 			return
 		}
 		time.Sleep(2 * time.Second)
@@ -1331,42 +1329,42 @@ func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Requ
 
 	sizeExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, sizeReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (size): %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("executor (size): %v", err)})
 		return
 	}
 
 	var sizeStdout strings.Builder
 	if err := sizeExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &sizeStdout, Stderr: io.Discard}); err != nil {
-		http.Error(w, fmt.Sprintf("size stream: %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("size stream: %v", err)})
 		return
 	}
 
 	sz := strings.TrimSpace(sizeStdout.String())
 	if sz == "" || sz == "MISSING" {
-		http.Error(w, "file not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		return
 	}
 
 	// Set appropriate content type based on file extension
 	if strings.HasSuffix(strings.ToLower(base), ".lz4") {
-		w.Header().Set("Content-Type", "application/x-lz4")
+		c.Writer.Header().Set("Content-Type", "application/x-lz4")
 	} else if strings.Contains(strings.ToLower(base), ".tar.") {
 		// .tar.gz or .tar.lz4
 		if strings.HasSuffix(strings.ToLower(base), ".gz") {
-			w.Header().Set("Content-Type", "application/gzip")
+			c.Writer.Header().Set("Content-Type", "application/gzip")
 		} else {
-			w.Header().Set("Content-Type", "application/x-lz4")
+			c.Writer.Header().Set("Content-Type", "application/x-lz4")
 		}
 	} else if strings.HasSuffix(strings.ToLower(base), ".gz") {
-		w.Header().Set("Content-Type", "application/gzip")
+		c.Writer.Header().Set("Content-Type", "application/gzip")
 	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
+		c.Writer.Header().Set("Content-Type", "application/octet-stream")
 	}
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", base))
-	w.Header().Set("Content-Length", sz)
+	c.Writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", base))
+	c.Writer.Header().Set("Content-Length", sz)
 
-	if f, ok := w.(http.Flusher); ok {
+	if f, ok := c.Writer.(http.Flusher); ok {
 		f.Flush()
 	}
 
@@ -1385,11 +1383,11 @@ func (a *APIServer) streamArtifactByFilename(w http.ResponseWriter, r *http.Requ
 
 	streamExec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, streamReq.URL())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("executor (stream): %v", err), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("executor (stream): %v", err)})
 		return
 	}
 
-	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: w, Stderr: io.Discard})
+	_ = streamExec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: c.Writer, Stderr: io.Discard})
 }
 
 func copyFileToPod(config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
@@ -1452,13 +1450,9 @@ func setOwnerRef(ctx context.Context, c client.Client, namespace, configMapName 
 	return c.Update(ctx, cm)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
+func writeJSON(c *gin.Context, status int, v any) {
+	c.Header("Cache-Control", "no-store")
+	c.IndentedJSON(status, v)
 }
 
 func resolveNamespace() string {
@@ -1474,7 +1468,7 @@ func resolveNamespace() string {
 	return "default"
 }
 
-func getRESTConfigFromRequest(_ *http.Request) (*rest.Config, error) {
+func getRESTConfigFromRequest(_ *gin.Context) (*rest.Config, error) {
 	var cfg *rest.Config
 	var err error
 	cfg, err = rest.InClusterConfig()
@@ -1490,8 +1484,8 @@ func getRESTConfigFromRequest(_ *http.Request) (*rest.Config, error) {
 	return cfgCopy, nil
 }
 
-func getClientFromRequest(r *http.Request) (client.Client, error) {
-	cfg, err := getRESTConfigFromRequest(r)
+func getClientFromRequest(c *gin.Context) (client.Client, error) {
+	cfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
 		return nil, err
 	}
@@ -1504,24 +1498,24 @@ func getClientFromRequest(r *http.Request) (client.Client, error) {
 		return nil, fmt.Errorf("failed to add core scheme: %w", err)
 	}
 
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
-	return c, nil
+	return k8sClient, nil
 }
 
-func isAuthenticated(r *http.Request) bool {
-	authHeader := r.Header.Get("Authorization")
+func isAuthenticated(c *gin.Context) bool {
+	authHeader := c.Request.Header.Get("Authorization")
 	token := ""
 	token, _ = strings.CutPrefix(authHeader, "Bearer ")
 	if token == "" {
-		token = r.Header.Get("X-Forwarded-Access-Token")
+		token = c.Request.Header.Get("X-Forwarded-Access-Token")
 	}
 	if strings.TrimSpace(token) == "" {
 		return false
 	}
-	cfg, err := getRESTConfigFromRequest(r)
+	cfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
 		return false
 	}
@@ -1530,29 +1524,29 @@ func isAuthenticated(r *http.Request) bool {
 		return false
 	}
 	tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
-	res, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{})
+	res, err := clientset.AuthenticationV1().TokenReviews().Create(c.Request.Context(), tr, metav1.CreateOptions{})
 	if err != nil {
 		return false
 	}
 	return res.Status.Authenticated
 }
 
-func resolveRequester(r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
+func resolveRequester(c *gin.Context) string {
+	authHeader := c.Request.Header.Get("Authorization")
 	token := ""
 	token, _ = strings.CutPrefix(authHeader, "Bearer ")
 	if token == "" {
-		token = r.Header.Get("X-Forwarded-Access-Token")
+		token = c.Request.Header.Get("X-Forwarded-Access-Token")
 	}
 
 	// Attempt TokenReview to obtain canonical username
 	if strings.TrimSpace(token) != "" {
-		cfg, err := getRESTConfigFromRequest(r)
+		cfg, err := getRESTConfigFromRequest(c)
 		if err == nil {
 			clientset, err := kubernetes.NewForConfig(cfg)
 			if err == nil {
 				tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
-				if res, err := clientset.AuthenticationV1().TokenReviews().Create(r.Context(), tr, metav1.CreateOptions{}); err == nil {
+				if res, err := clientset.AuthenticationV1().TokenReviews().Create(c.Request.Context(), tr, metav1.CreateOptions{}); err == nil {
 					if res.Status.Authenticated && res.Status.User.Username != "" {
 						return res.Status.User.Username
 					}
@@ -1562,7 +1556,7 @@ func resolveRequester(r *http.Request) string {
 	}
 
 	// Last resort: consult proxy-provided header (not trusted, used only as fallback)
-	if u := strings.TrimSpace(r.Header.Get("X-Forwarded-User")); u != "" {
+	if u := strings.TrimSpace(c.Request.Header.Get("X-Forwarded-User")); u != "" {
 		return u
 	}
 	return "unknown"
