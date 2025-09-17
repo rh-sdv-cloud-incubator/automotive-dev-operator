@@ -30,6 +30,7 @@ import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { CubesIcon, DownloadIcon, EyeIcon, RedoIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
 import { authFetch, API_BASE, BUILD_API_BASE } from '../utils/auth';
+import { useLogStream } from '../hooks/useLogStream';
 
 interface BuildItem {
   name: string;
@@ -73,24 +74,40 @@ const BuildListPage: React.FC = () => {
   const [selectedBuild, setSelectedBuild] = useState<string | null>(null);
   const [buildDetails, setBuildDetails] = useState<BuildDetails | null>(null);
   const [buildParams, setBuildParams] = useState<BuildParams | null>(null);
-  const [logs, setLogs] = useState<string>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | number>(0);
   const [loadingDetails, setLoadingDetails] = useState(false);
-  const [loadingLogs, setLoadingLogs] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const autoRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const logsAbortRef = useRef<AbortController | null>(null);
-  const lastChunkAtRef = useRef<number>(0);
-  const watchdogIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lineBufferRef = useRef<string>('');
-  const INACTIVITY_RESTART_SEC = 15;
   const [nowTs, setNowTs] = useState<number>(Date.now());
   const liveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(null);
   const downloadInProgressRef = useRef<string | null>(null);
+
+  // Use the new SSE log streaming hook
+  const {
+    logs,
+    currentStep,
+    isStreaming,
+    isConnected,
+    logStreamError,
+    startStream,
+    stopStream,
+    clearLogs,
+  } = useLogStream({
+    onLogUpdate: () => {
+      setTimeout(() => {
+        const el = logContainerRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+        }
+      }, 0);
+    },
+    onError: (error) => {
+      setError(`Log streaming error: ${error}`);
+    },
+  });
 
   const scrollLogsToBottom = () => {
     requestAnimationFrame(() => {
@@ -144,26 +161,6 @@ const BuildListPage: React.FC = () => {
     return `${mm}m ${ss}s`;
   };
 
-  const startWatchdog = (buildName: string) => {
-    stopWatchdog();
-    watchdogIntervalRef.current = setInterval(() => {
-      const secondsSinceLastChunk = (Date.now() - lastChunkAtRef.current) / 1000;
-      if ((!isStreaming || secondsSinceLastChunk > INACTIVITY_RESTART_SEC) && selectedBuild && activeTab === 1) {
-        if (logsAbortRef.current) {
-          try { logsAbortRef.current.abort(); } catch {}
-          logsAbortRef.current = null;
-        }
-        fetchLogs(buildName, true);
-      }
-    }, 5000);
-  };
-
-  const stopWatchdog = () => {
-    if (watchdogIntervalRef.current) {
-      clearInterval(watchdogIntervalRef.current);
-      watchdogIntervalRef.current = null;
-    }
-  };
 
   const fetchBuilds = async () => {
     try {
@@ -220,110 +217,6 @@ const BuildListPage: React.FC = () => {
     }
   };
 
-  const fetchLogs = async (buildName: string, isAutoRefresh = false) => {
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    try {
-      if (logsAbortRef.current) {
-        try { logsAbortRef.current.abort(); } catch {}
-      }
-      const controller = new AbortController();
-      logsAbortRef.current = controller;
-
-      if (!isAutoRefresh) {
-        setLoadingLogs(true);
-        setLogs('');
-      }
-      setIsStreaming(true);
-
-      const maxAttempts = 60;
-      const delayMs = 2000;
-      let response: Response | null = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        response = await authFetch(`${API_BASE}/v1/builds/${buildName}/logs`, {
-          signal: controller.signal,
-          headers: { 'Accept': 'text/plain' },
-        });
-        if (response.ok) break;
-        if (response.status === 503 && attempt < maxAttempts) {
-          await sleep(delayMs);
-          continue;
-        }
-        throw new Error(`Failed to fetch logs: ${response.status}`);
-      }
-
-      if (!response || !response.ok) {
-        throw new Error('Logs not available');
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let logContent = isAutoRefresh ? logs : '';
-      let gotFirstChunk = false;
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            setIsStreaming(false);
-            if (lineBufferRef.current) {
-              logContent += lineBufferRef.current + "\n";
-              lineBufferRef.current = '';
-              setLogs(logContent);
-            }
-            fetchBuilds();
-            if (selectedBuild) {
-              fetchBuildDetails(selectedBuild);
-            }
-            break;
-          }
-
-          const chunk = decoder.decode(value, { stream: true });
-          const combined = (lineBufferRef.current || '') + chunk;
-          const parts = combined.split(/\r?\n/);
-          lineBufferRef.current = parts.pop() ?? '';
-          if (parts.length > 0) {
-            logContent += parts.join('\n') + '\n';
-            setLogs(logContent);
-            scrollLogsToBottom();
-          }
-          lastChunkAtRef.current = Date.now();
-          if (!gotFirstChunk) {
-            gotFirstChunk = true;
-            setLoadingLogs(false);
-          }
-        }
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError' || String(err).includes('AbortError')) {
-        return;
-      }
-
-      const errorMessage = String(err);
-      if (errorMessage.includes('ERR_INCOMPLETE_CHUNKED_ENCODING') ||
-          errorMessage.includes('net::ERR_INCOMPLETE_CHUNKED_ENCODING')) {
-        console.warn('Chunked encoding incomplete, retrying log stream...', err);
-        setTimeout(() => {
-          if (selectedBuild) {
-            fetchLogs(selectedBuild, true);
-          }
-        }, 1000);
-        return;
-      }
-
-      // Transient network error: schedule a silent retry
-      setTimeout(() => {
-        if (selectedBuild) {
-          fetchLogs(selectedBuild, true);
-        }
-      }, 1500);
-    } finally {
-      setLoadingLogs(false);
-      setIsStreaming(false);
-      if (logsAbortRef.current) {
-        logsAbortRef.current = null;
-      }
-    }
-  };
 
   const fetchBuildParams = async (buildName: string) => {
     try {
@@ -430,11 +323,8 @@ const BuildListPage: React.FC = () => {
         stopAutoRefresh();
         return;
       }
-      if (fresh && (fresh.phase === 'Running' || fresh.phase === 'Pending') && activeTab === 1 && !isStreaming) {
-        fetchLogs(buildName, true);
-      }
+      // SSE handles log streaming automatically, no need to manually fetch logs
     }, 5000);
-    startWatchdog(buildName);
   };
 
   const stopAutoRefresh = () => {
@@ -443,11 +333,7 @@ const BuildListPage: React.FC = () => {
       autoRefreshIntervalRef.current = null;
     }
     setAutoRefresh(false);
-    if (logsAbortRef.current) {
-      try { logsAbortRef.current.abort(); } catch {}
-      logsAbortRef.current = null;
-    }
-    stopWatchdog();
+    stopStream();
   };
 
   const openBuildModal = (buildName: string) => {
@@ -457,11 +343,8 @@ const BuildListPage: React.FC = () => {
     setArtifactItems(null);
     fetchBuildDetails(buildName);
     fetchBuildParams(buildName);
-    setTimeout(() => {
-      if (buildName && !logs && !loadingLogs) {
-        fetchLogs(buildName);
-      }
-    }, 300);
+    // Clear logs when opening modal
+    clearLogs();
   };
 
   const applyBuildAsTemplate = async (buildName: string) => {
@@ -483,9 +366,8 @@ const BuildListPage: React.FC = () => {
     setIsModalOpen(false);
     setSelectedBuild(null);
     setBuildDetails(null);
-    setLogs('');
+    clearLogs();
     setActiveTab(0);
-    setIsStreaming(false);
   };
 
   const getPhaseVariant = (phase: string): 'blue' | 'cyan' | 'green' | 'orange' | 'purple' | 'red' | 'grey' => {
@@ -858,58 +740,68 @@ curl -H "Authorization: Bearer $TOKEN" \\
             <Tab
               eventKey={1}
               title={<TabTitleText>Logs</TabTitleText>}
-              onSelect={() => {
-                if (selectedBuild && buildDetails && (buildDetails.phase === 'Running' || buildDetails.phase === 'Pending')) {
-                  startAutoRefresh(selectedBuild);
-                  if (!isStreaming) {
-                    fetchLogs(selectedBuild);
-                  }
-                }
-              }}
             >
-              {loadingLogs ? (
-                <Bullseye style={{ height: '200px' }}>
-                  <Spinner />
-                </Bullseye>
-              ) : (
-                <div style={{ padding: '16px 0' }}>
-                  <Flex style={{ marginBottom: '16px' }}>
-                    <FlexItem>
+              <div style={{ padding: '16px 0' }}>
+                <Flex style={{ marginBottom: '16px' }}>
+                  <FlexItem>
+                    <Button
+                      variant="secondary"
+                      onClick={() => selectedBuild && startStream(selectedBuild)}
+                      icon={<RedoIcon />}
+                      isDisabled={isStreaming || isConnected}
+                    >
+                      {isStreaming ? 'Streaming...' : isConnected ? 'Connected' : 'Start Log Stream'}
+                    </Button>
+                    {(isStreaming || isConnected) && (
                       <Button
-                        variant="secondary"
-                        onClick={() => selectedBuild && fetchLogs(selectedBuild)}
-                        icon={<RedoIcon />}
-                        isDisabled={false}
+                        variant="tertiary"
+                        onClick={stopStream}
+                        style={{ marginLeft: '8px' }}
                       >
-                        Refresh Logs
+                        Stop Stream
                       </Button>
-                    </FlexItem>
-                    <FlexItem>
-                      {isStreaming && (
-                        <Badge isRead>
-                          <Spinner size="sm" style={{ marginRight: '8px' }} />
-                          Streaming...
-                        </Badge>
-                      )}
-                      {autoRefresh && (
-                        <Badge style={{ marginLeft: '8px' }}>
-                          Auto-refresh enabled
-                        </Badge>
-                      )}
-                    </FlexItem>
-                  </Flex>
-                  <div
-                    ref={logContainerRef}
-                    style={{ maxHeight: '60vh', overflowY: 'auto', border: '1px solid #d2d2d2', borderRadius: 4 }}
-                  >
-                    <CodeBlock>
-                      <CodeBlockCode>
-                        {logs || 'No logs available'}
-                      </CodeBlockCode>
-                    </CodeBlock>
-                  </div>
+                    )}
+                  </FlexItem>
+                  <FlexItem>
+                    {isStreaming && (
+                      <Badge isRead>
+                        <Spinner size="sm" style={{ marginRight: '8px' }} />
+                        Streaming...
+                      </Badge>
+                    )}
+                    {isConnected && (
+                      <Badge style={{ marginLeft: '8px' }} color="green">
+                        Connected
+                      </Badge>
+                    )}
+                    {logStreamError && (
+                      <Badge style={{ marginLeft: '8px' }} color="red">
+                        Error: {logStreamError}
+                      </Badge>
+                    )}
+                    {autoRefresh && (
+                      <Badge style={{ marginLeft: '8px' }}>
+                        Auto-refresh enabled
+                      </Badge>
+                    )}
+                    {currentStep && (
+                      <Badge style={{ marginLeft: '8px' }} color="blue">
+                        Step: {currentStep}
+                      </Badge>
+                    )}
+                  </FlexItem>
+                </Flex>
+                <div
+                  ref={logContainerRef}
+                  style={{ maxHeight: '60vh', overflowY: 'auto', border: '1px solid #d2d2d2', borderRadius: 4 }}
+                >
+                  <CodeBlock>
+                    <CodeBlockCode>
+                      {logs || 'No logs available. Click "Start Log Stream" to begin streaming logs.'}
+                    </CodeBlockCode>
+                  </CodeBlock>
                 </div>
-              )}
+              </div>
             </Tab>
           </Tabs>
         </ModalBody>

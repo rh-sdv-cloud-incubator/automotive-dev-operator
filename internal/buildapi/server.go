@@ -90,6 +90,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 		reqID := uuid.New().String()
 		c.Set("reqID", reqID)
 		a.log.Info("http request", "method", c.Request.Method, "path", c.Request.URL.Path, "reqID", reqID)
+		fmt.Printf("HTTP Request: %s %s\n", c.Request.Method, c.Request.URL.Path)
 		c.Next()
 	})
 
@@ -117,6 +118,17 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
 			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
 		}
+
+		// SSE endpoint without authentication middleware for testing
+		v1.GET("/builds/:name/logs/sse", a.handleStreamLogsSSE)
+
+		// Simple test SSE endpoint
+		v1.GET("/test-sse", a.handleTestSSE)
+
+		// Simple test endpoint to verify proxy is working
+		v1.GET("/test", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"message": "Test endpoint working", "timestamp": time.Now().Unix()})
+		})
 	}
 
 	return router
@@ -166,6 +178,42 @@ func (a *APIServer) handleStreamLogs(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("logs requested", "build", name, "reqID", c.GetString("reqID"))
 	streamLogs(c, name)
+}
+
+func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("logs SSE requested", "build", name, "reqID", c.GetString("reqID"))
+
+	// Temporarily bypass authentication for testing
+	streamLogsSSE(c, name)
+}
+
+func (a *APIServer) handleTestSSE(c *gin.Context) {
+	a.log.Info("test SSE requested", "reqID", c.GetString("reqID"))
+
+	// Set up SSE response headers
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	c.Writer.WriteHeader(http.StatusOK)
+
+	// Send test events
+	sendSSEEvent(c, "connected", "", "Test SSE connection established")
+	c.Writer.Flush()
+
+	// Send some test log events
+	for i := 1; i <= 5; i++ {
+		time.Sleep(1 * time.Second)
+		sendSSEEvent(c, "log", "test-step", fmt.Sprintf("Test log message %d", i))
+		c.Writer.Flush()
+	}
+
+	sendSSEEvent(c, "completed", "", "Test completed")
+	c.Writer.Flush()
 }
 
 func (a *APIServer) handleListArtifacts(c *gin.Context) {
@@ -383,22 +431,238 @@ func streamLogs(c *gin.Context, name string) {
 	}
 }
 
-func splitPath(p string) []string {
-	if len(p) > 0 && p[0] == '/' {
-		p = p[1:]
+func streamLogsSSE(c *gin.Context, name string) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Client error: %v", err))
+		c.Writer.Flush()
+		return
 	}
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return []string{}
+
+	ctx := c.Request.Context()
+	var podName string
+
+	ib := &automotivev1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err != nil {
+		if k8serrors.IsNotFound(err) {
+			sendSSEEvent(c, "message", "", "ERROR: Build not found")
+		} else {
+			sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Build lookup error: %v", err))
+		}
+		c.Writer.Flush()
+		return
 	}
-	raw := strings.Split(p, "/")
-	parts := make([]string, 0, len(raw))
-	for _, s := range raw {
-		if s != "" {
-			parts = append(parts, s)
+	tr := strings.TrimSpace(ib.Status.TaskRunName)
+	if tr == "" {
+		sendSSEEvent(c, "waiting", "", "Build not started yet, waiting for logs...")
+		c.Writer.Flush()
+		return
+	}
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Config error: %v", err))
+		c.Writer.Flush()
+		return
+	}
+	quickCS, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Kubernetes client error: %v", err))
+		c.Writer.Flush()
+		return
+	}
+	pods, err := quickCS.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/taskRun=" + tr})
+	if err != nil || len(pods.Items) == 0 {
+		sendSSEEvent(c, "waiting", "", "Build pods not ready yet, waiting for logs...")
+		c.Writer.Flush()
+		return
+	}
+	podName = pods.Items[0].Name
+
+	cfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		sendSSEEvent(c, "message", "", fmt.Sprintf("Config error: %v", err))
+		c.Writer.Flush()
+		return
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		sendSSEEvent(c, "message", "", fmt.Sprintf("Kubernetes client error: %v", err))
+		c.Writer.Flush()
+		return
+	}
+
+	sendSSEEvent(c, "connected", "", "Log stream connected")
+	c.Writer.Flush()
+
+	var hadStream bool
+	streamed := make(map[string]bool)
+	var lastErrs []string
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sendSSEEvent(c, "ping", "", "")
+				c.Writer.Flush()
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			sendSSEEvent(c, "disconnected", "", "Connection closed")
+			c.Writer.Flush()
+			return
+		default:
+		}
+
+		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			sendSSEEvent(c, "error", "", fmt.Sprintf("Error: %v", err))
+			c.Writer.Flush()
+			return
+		}
+
+		stepNames := make([]string, 0, len(pod.Spec.Containers))
+		for _, container := range pod.Spec.Containers {
+			if strings.HasPrefix(container.Name, "step-") {
+				stepNames = append(stepNames, container.Name)
+			}
+		}
+		if len(stepNames) == 0 {
+			for _, container := range pod.Spec.Containers {
+				stepNames = append(stepNames, container.Name)
+			}
+		}
+
+		var errs []string
+
+		for _, cName := range stepNames {
+			if streamed[cName] {
+				continue
+			}
+
+			req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
+			stream, err := req.Stream(ctx)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
+				continue
+			}
+
+			if !hadStream {
+				c.Writer.Flush()
+			}
+			hadStream = true
+
+			stepName := strings.TrimPrefix(cName, "step-")
+			sendSSEEvent(c, "step", stepName, "===== Logs from "+stepName+" =====")
+			c.Writer.Flush()
+
+			func() {
+				defer stream.Close()
+
+				buf := make([]byte, 4096)
+				var lineBuffer strings.Builder
+
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
+					n, err := stream.Read(buf)
+					if n > 0 {
+						chunk := string(buf[:n])
+						lineBuffer.WriteString(chunk)
+
+						lines := strings.Split(lineBuffer.String(), "\n")
+						lineBuffer.Reset()
+
+						if len(lines) > 1 {
+							lineBuffer.WriteString(lines[len(lines)-1])
+							lines = lines[:len(lines)-1]
+						}
+
+						for _, line := range lines {
+							if strings.TrimSpace(line) != "" {
+								sendSSEEvent(c, "log", stepName, line)
+								c.Writer.Flush()
+							}
+						}
+					}
+
+					if err != nil {
+						if err != io.EOF {
+							sendSSEEvent(c, "error", stepName, fmt.Sprintf("Stream error: %v", err))
+							c.Writer.Flush()
+						}
+						return
+					}
+				}
+			}()
+
+			streamed[cName] = true
+		}
+
+		if len(errs) > 0 {
+			lastErrs = errs
+		}
+
+		if len(streamed) == len(stepNames) {
+			break
+		}
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
+		if !hadStream {
+			sendSSEEvent(c, "waiting", "", "Waiting for logs...")
+			c.Writer.Flush()
 		}
 	}
-	return parts
+
+	if !hadStream {
+		sendSSEEvent(c, "error", "", "logs unavailable: "+strings.Join(lastErrs, "; "))
+		c.Writer.Flush()
+		return
+	}
+
+	sendSSEEvent(c, "completed", "", "Log streaming completed")
+	c.Writer.Flush()
+}
+
+// sendSSEEvent sends a Server-Sent Event
+func sendSSEEvent(c *gin.Context, event, step, data string) {
+	if event != "" {
+		c.Writer.WriteString("event: " + event + "\n")
+	}
+	if step != "" {
+		c.Writer.WriteString("id: " + step + "\n")
+	}
+	if data != "" {
+		// Escape newlines in data
+		escapedData := strings.ReplaceAll(data, "\n", "\\n")
+		c.Writer.WriteString("data: " + escapedData + "\n")
+	}
+	c.Writer.WriteString("\n")
 }
 
 func createRegistrySecret(ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *RegistryCredentials) (string, error) {
