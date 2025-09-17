@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -110,6 +111,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 		{
 			buildsGroup.POST("", a.handleCreateBuild)
 			buildsGroup.GET("", a.handleListBuilds)
+			buildsGroup.GET("/sse", a.handleStreamBuildsSSE)
 			buildsGroup.GET("/:name", a.handleGetBuild)
 			buildsGroup.GET("/:name/logs", a.handleStreamLogs)
 			buildsGroup.GET("/:name/artifacts", a.handleListArtifacts)
@@ -186,6 +188,11 @@ func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
 
 	// Temporarily bypass authentication for testing
 	streamLogsSSE(c, name)
+}
+
+func (a *APIServer) handleStreamBuildsSSE(c *gin.Context) {
+	a.log.Info("builds SSE requested", "reqID", c.GetString("reqID"))
+	streamBuildsSSE(c)
 }
 
 func (a *APIServer) handleTestSSE(c *gin.Context) {
@@ -647,6 +654,160 @@ func streamLogsSSE(c *gin.Context, name string) {
 
 	sendSSEEvent(c, "completed", "", "Log streaming completed")
 	c.Writer.Flush()
+}
+
+func streamBuildsSSE(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		sendSSEEvent(c, "error", "", fmt.Sprintf("Client error: %v", err))
+		c.Writer.Flush()
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Send initial connection event
+	sendSSEEvent(c, "connected", "", "Builds stream connected")
+	c.Writer.Flush()
+
+	// Send initial list of builds
+	var buildList automotivev1.ImageBuildList
+	if err := k8sClient.List(ctx, &buildList, client.InNamespace(namespace)); err != nil {
+		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
+		c.Writer.Flush()
+		return
+	}
+
+	// Convert and send initial builds
+	builds := convertImageBuildList(&buildList)
+	buildsData, err := json.Marshal(builds)
+	if err != nil {
+		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to marshal builds: %v", err))
+		c.Writer.Flush()
+		return
+	}
+
+	sendSSEEvent(c, "initial-list", "", string(buildsData))
+	c.Writer.Flush()
+
+	// Store the last known state of builds for comparison
+	lastBuilds := make(map[string]BuildListItem)
+	for _, build := range builds {
+		lastBuilds[build.Name] = build
+	}
+
+	// Send keepalive pings and poll for changes
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			sendSSEEvent(c, "disconnected", "", "Connection closed")
+			c.Writer.Flush()
+			return
+
+		case <-pingTicker.C:
+			sendSSEEvent(c, "ping", "", "")
+			c.Writer.Flush()
+
+		case <-ticker.C:
+			// Poll for build changes
+			var currentBuildList automotivev1.ImageBuildList
+			if err := k8sClient.List(ctx, &currentBuildList, client.InNamespace(namespace)); err != nil {
+				sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
+				c.Writer.Flush()
+				continue
+			}
+
+			currentBuilds := convertImageBuildList(&currentBuildList)
+			currentBuildsMap := make(map[string]BuildListItem)
+			for _, build := range currentBuilds {
+				currentBuildsMap[build.Name] = build
+			}
+
+			// Check for new or updated builds
+			for name, currentBuild := range currentBuildsMap {
+				if lastBuild, exists := lastBuilds[name]; !exists {
+					// New build
+					data, err := json.Marshal(currentBuild)
+					if err == nil {
+						sendSSEEvent(c, "build-created", name, string(data))
+						c.Writer.Flush()
+					}
+				} else if lastBuild != currentBuild {
+					// Updated build
+					data, err := json.Marshal(currentBuild)
+					if err == nil {
+						sendSSEEvent(c, "build-updated", name, string(data))
+						c.Writer.Flush()
+					}
+				}
+			}
+
+			// Check for deleted builds
+			for name := range lastBuilds {
+				if _, exists := currentBuildsMap[name]; !exists {
+					// Deleted build
+					data, err := json.Marshal(lastBuilds[name])
+					if err == nil {
+						sendSSEEvent(c, "build-deleted", name, string(data))
+						c.Writer.Flush()
+					}
+				}
+			}
+
+			// Update last known state
+			lastBuilds = currentBuildsMap
+		}
+	}
+}
+
+// convertImageBuildList converts a Kubernetes ImageBuildList to the API response format
+func convertImageBuildList(list *automotivev1.ImageBuildList) []BuildListItem {
+	resp := make([]BuildListItem, 0, len(list.Items))
+	for _, b := range list.Items {
+		resp = append(resp, convertImageBuildToListItem(&b))
+	}
+	return resp
+}
+
+// convertImageBuild converts a Kubernetes ImageBuild to the API response format
+func convertImageBuild(b *automotivev1.ImageBuild) BuildListItem {
+	return convertImageBuildToListItem(b)
+}
+
+// convertImageBuildToListItem converts a single ImageBuild to BuildListItem
+func convertImageBuildToListItem(b *automotivev1.ImageBuild) BuildListItem {
+	var startStr, compStr string
+	if b.Status.StartTime != nil {
+		startStr = b.Status.StartTime.Time.Format(time.RFC3339)
+	}
+	if b.Status.CompletionTime != nil {
+		compStr = b.Status.CompletionTime.Time.Format(time.RFC3339)
+	}
+	return BuildListItem{
+		Name:           b.Name,
+		Phase:          b.Status.Phase,
+		Message:        b.Status.Message,
+		RequestedBy:    b.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
+		CreatedAt:      b.CreationTimestamp.Time.Format(time.RFC3339),
+		StartTime:      startStr,
+		CompletionTime: compStr,
+	}
 }
 
 // sendSSEEvent sends a Server-Sent Event

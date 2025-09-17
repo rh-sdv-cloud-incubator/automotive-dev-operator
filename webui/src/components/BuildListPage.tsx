@@ -31,6 +31,7 @@ import { CubesIcon, DownloadIcon, EyeIcon, RedoIcon } from '@patternfly/react-ic
 import { useNavigate } from 'react-router-dom';
 import { authFetch, API_BASE, BUILD_API_BASE } from '../utils/auth';
 import { useLogStream } from '../hooks/useLogStream';
+import { useBuildsList, BuildItem as SSEBuildItem } from '../hooks/useBuildsList';
 
 interface BuildItem {
   name: string;
@@ -68,8 +69,6 @@ interface BuildParams {
 
 const BuildListPage: React.FC = () => {
   const navigate = useNavigate();
-  const [builds, setBuilds] = useState<BuildItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedBuild, setSelectedBuild] = useState<string | null>(null);
   const [buildDetails, setBuildDetails] = useState<BuildDetails | null>(null);
@@ -106,6 +105,30 @@ const BuildListPage: React.FC = () => {
     },
     onError: (error) => {
       setError(`Log streaming error: ${error}`);
+    },
+  });
+
+  // Use the new SSE builds list hook
+  const {
+    builds,
+    isConnected: buildsConnected,
+    isConnecting: buildsConnecting,
+    error: buildsError,
+    startStream: startBuildsStream,
+    stopStream: stopBuildsStream,
+    refreshBuilds,
+  } = useBuildsList({
+    onError: (error) => {
+      setError(`Builds streaming error: ${error}`);
+    },
+    onBuildCreated: (build) => {
+      console.log('New build created:', build.name);
+    },
+    onBuildUpdated: (build) => {
+      console.log('Build updated:', build.name, build.phase);
+    },
+    onBuildDeleted: (build) => {
+      console.log('Build deleted:', build.name);
     },
   });
 
@@ -162,41 +185,6 @@ const BuildListPage: React.FC = () => {
   };
 
 
-  const fetchBuilds = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await authFetch(`${API_BASE}/v1/builds`);
-      if (response.ok) {
-        const data = await response.json();
-        let list: any[] = Array.isArray(data) ? data : [];
-        // Enrich missing times for completed/failed items
-        const enriched = await Promise.all(
-          list.map(async (b) => {
-            const hasTimes = !!(b.startTime) && !!(b.completionTime);
-            const phase = (b.phase || '').toLowerCase();
-            if (!hasTimes && (phase === 'completed' || phase === 'failed')) {
-              try {
-                const r = await authFetch(`${API_BASE}/v1/builds/${encodeURIComponent(b.name)}`);
-                if (r.ok) {
-                  const d = await r.json();
-                  return { ...b, startTime: d.startTime || b.startTime, completionTime: d.completionTime || b.completionTime };
-                }
-              } catch {}
-            }
-            return b;
-          })
-        );
-        setBuilds(enriched as BuildItem[]);
-      } else {
-        throw new Error(`Failed to fetch builds: ${response.status}`);
-      }
-    } catch (err) {
-      setError(`Error fetching builds: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const fetchBuildDetails = async (buildName: string): Promise<BuildDetails | null> => {
     try {
@@ -383,13 +371,15 @@ const BuildListPage: React.FC = () => {
     }
   };
 
+  // Start SSE builds streaming on component mount
   useEffect(() => {
-    fetchBuilds();
-    const interval = setInterval(fetchBuilds, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    startBuildsStream();
+    return () => {
+      stopBuildsStream();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading && builds.length === 0) {
+  if (buildsConnecting && builds.length === 0) {
     return (
       <PageSection>
         <Bullseye>
@@ -413,12 +403,23 @@ const BuildListPage: React.FC = () => {
           </Button>
           <Button
             variant="secondary"
-            onClick={fetchBuilds}
+            onClick={refreshBuilds}
             style={{ marginLeft: '8px' }}
             icon={<RedoIcon />}
           >
             Refresh
           </Button>
+          {buildsConnecting && (
+            <Badge color="blue" style={{ marginLeft: '8px' }}>
+              <Spinner size="sm" style={{ marginRight: '4px' }} />
+              Connecting...
+            </Badge>
+          )}
+          {buildsError && (
+            <Badge color="red" style={{ marginLeft: '8px' }}>
+              Connection Error
+            </Badge>
+          )}
         </FlexItem>
       </Flex>
 

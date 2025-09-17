@@ -79,6 +79,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache',
         },
+        credentials: 'include',
         signal: abortController.signal,
       });
 
