@@ -398,8 +398,8 @@ const BuildListPage: React.FC = () => {
           </Title>
         </FlexItem>
         <FlexItem>
-          <Button variant="primary" onClick={() => navigate('/')}>
-            Create New Build
+          <Button variant="primary" onClick={() => navigate('/create')}>
+            Create
           </Button>
           <Button
             variant="secondary"
@@ -441,7 +441,7 @@ const BuildListPage: React.FC = () => {
                 Create your first image build to get started.
               </EmptyStateBody>
               <EmptyStateActions>
-                <Button variant="primary" onClick={() => navigate('/')}>
+                <Button variant="primary" onClick={() => navigate('/create')}>
                   Create Build
                 </Button>
               </EmptyStateActions>

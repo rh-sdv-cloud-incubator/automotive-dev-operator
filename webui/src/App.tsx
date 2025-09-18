@@ -48,7 +48,7 @@ const App: React.FC = () => {
   const Navigation = (
     <Nav>
       <NavList>
-        <NavItem to="/" isActive={window.location.pathname === '/'}>
+        <NavItem to="/create" isActive={window.location.pathname === '/create'}>
           <CubesIcon /> Create Build
         </NavItem>
         <NavItem to="/builds" isActive={window.location.pathname === '/builds'}>
@@ -70,8 +70,9 @@ const App: React.FC = () => {
     <Router>
       <Page masthead={masthead} sidebar={sidebar}>
         <Routes>
-          <Route path="/" element={<CreateBuildPage />} />
+          <Route path="/" element={<BuildListPage />} />
           <Route path="/builds" element={<BuildListPage />} />
+          <Route path="/create" element={<CreateBuildPage />} />
         </Routes>
       </Page>
     </Router>
