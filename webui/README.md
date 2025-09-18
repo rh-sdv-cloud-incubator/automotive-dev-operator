@@ -1,83 +1,59 @@
-# Automotive Dev Operator Web UI
+# PatternFly AI Coding Support
 
-A React-based web interface for creating and managing automotive OS image builds using PatternFly 6.
+## Who is this for?
+This repository is for individuals and AI agents who want to prototype PatternFly applications using the latest best practices, with AI assistance (Cursor, Copilot, ChatGPT, etc.).
 
-## Features
+## Quick Start (TL;DR)
+1. **Clone or copy this repo (or at least the `.pf-ai-documentation/` directory and `.cursor/rules/` files) into your project.**
+2. **Open your project in Cursor or your preferred AI coding tool.**
+3. (Optional) **Set up context7 MCP for always-up-to-date PatternFly docs.**
 
-- **Create Builds**: Interactive form with free text inputs for all build parameters
-- **External Files**: Create text files and upload binary files for builds
-- **Monitor Builds**: Real-time build status and progress tracking
-- **View Logs**: Stream build logs in real-time
-- **Download Artifacts**: Download completed build artifacts
-- **Responsive Design**: Modern UI using PatternFly 6 components
+## Goal
+The primary aim is to offer a comprehensive, AI-friendly knowledge base and starting point for prototyping PatternFly applications. By indexing relevant documentation and providing context files, this repo ensures that any AI model can deliver accurate, consistent, and best-practice guidance while you code.
 
-## Development
+## Core Components
+The core components of this repository are the README and markdown files found throughout the project. These files provide indexed documentation, guidelines, and best practices to support AI-assisted PatternFly development, regardless of which AI coding tool you use.
 
-### Prerequisites
+- **Table of Contents:** See [`.pf-ai-documentation/README.md`](documentation/README.md) for a full table of contents and navigation to all rules, guides, and best practices.
 
-- Node.js 18+ 
-- npm 9+
+## Using This Documentation with Cursor and AI Tools
 
-### Getting Started
+> **Important:**
+> Simply providing a link to this repository is not enough for Cursor (or most AI tools) to load all the context and instructions. These tools only index files that are present in your local project workspace.
 
-1. Install dependencies:
-```bash
-npm ci
-```
+### Best Practice: Add Documentation Locally
+To get the full benefit of these docs and rules:
+1. **Clone or copy this repository (or at least the `.pf-ai-documentation/` directory and `.cursor/rules/` files) into your project.**
+2. **Open your project in Cursor (or your preferred AI coding tool).**
+3. **Keep your local docs up to date** by pulling changes from this repo as it evolves.
 
-2. Start the development server:
-```bash
-npm start
-```
+### Why Local Files Matter
+- Cursor and similar tools only use files present in your local workspace for context and code search.
+- If the documentation and rules are not present locally, the AI will not "see" them, even if you provide a link.
 
-The application will start on http://localhost:3000 and proxy API calls to http://localhost:8080.
+### For Maximum Effectiveness
+- Use context7 or another MCP server to supplement your local docs with the latest upstream PatternFly documentation.
+- Encourage your team to read and follow the local documentation and rules for consistent, best-practice PatternFly development.
 
-### Building for Production
+## Setting Up context7 MCP for Latest Docs (Optional)
+> **How to set up context7 MCP server:**
+> 1. Ensure you have Node.js v18+ and an MCP-compatible client (e.g., Cursor, VS Code with MCP extension, Windsurf, Claude Desktop).
+> 2. Add context7 as an MCP server in your client's configuration. For example, in Cursor, add this to your `~/.cursor/mcp.json`:
+>    ```json
+>    {
+>      "mcpServers": {
+>        "context7": {
+>          "command": "npx",
+>          "args": ["-y", "@upstash/context7-mcp@latest"]
+>        }
+>      }
+>    }
+>    ```
+> 3. Save and restart your client/editor.
+> 4. For more details and setup instructions for other editors, see the official guide: https://github.com/upstash/context7#installation
 
-```bash
-npm run build
-```
+## Reference Documentation
+- [PatternFly.org](https://www.patternfly.org/)
+- [PatternFly React GitHub Repository](https://github.com/patternfly/patternfly-react)
 
-## Docker
-
-### Build the Docker image:
-
-```bash
-docker build -t automotive-dev-webui .
-```
-
-### Run the container:
-
-```bash
-docker run -p 8080:80 automotive-dev-webui
-```
-
-## Configuration
-
-The application expects the REST API to be available at `/v1/` endpoints. In production, nginx proxies these requests to the `automotive-dev-build-api` service.
-
-## API Integration
-
-The web UI integrates with the following REST API endpoints:
-
-- `POST /v1/builds` - Create a new build
-- `GET /v1/builds` - List all builds  
-- `GET /v1/builds/{name}` - Get build details
-- `GET /v1/builds/{name}/logs` - Stream build logs
-- `GET /v1/builds/{name}/artifact/{filename}` - Download build artifact by filename
-
-## Form Fields
-
-All form fields support free text input as requested:
-
-- **Build Name**: Unique identifier for the build
-- **Manifest Content**: YAML content for the build manifest
-- **Distribution**: Target distribution (default: cs9)
-- **Target**: Build target (default: qemu)  
-- **Architecture**: Target architecture (default: arm64)
-- **Export Format**: Output format (default: image)
-- **Mode**: Build mode (default: image)
-- **Container Image**: automotive-image-builder container to use
-- **AIB Extra Args**: Additional arguments for automotive-image-builder
-- **AIB Override Args**: Complete override of AIB arguments
-- **Enable Artifact Downloads**: Allow downloading build artifacts (recommended)
+> For all rules and examples, consult both PatternFly.org and the official GitHub repository. When using AI tools, leverage context7 to fetch the latest docs from these sources.

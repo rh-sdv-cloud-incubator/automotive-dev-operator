@@ -12,14 +12,19 @@ import {
   MastheadMain,
   MastheadBrand,
   MastheadToggle,
-  PageToggleButton
+  PageToggleButton,
+  SkipToContent,
+  BackToTop,
+  Title
 } from '@patternfly/react-core';
-import { CubesIcon, ListIcon, BarsIcon } from '@patternfly/react-icons';
+import { CubesIcon, ListIcon, BarsIcon, CatalogIcon } from '@patternfly/react-icons';
 import CreateBuildPage from './components/CreateBuildPage';
 import BuildListPage from './components/BuildListPage';
+import CatalogPage from './components/CatalogPage';
 
 const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const mainContentId = "main-content";
 
   const onSidebarToggle = () => {
     setIsSidebarOpen(!isSidebarOpen);
@@ -39,7 +44,9 @@ const App: React.FC = () => {
       </MastheadToggle>
       <MastheadMain>
         <MastheadBrand>
-            AIB UI
+          <Brand alt="AIB UI">
+            <Title headingLevel="h1" size="lg">AIB UI</Title>
+          </Brand>
         </MastheadBrand>
       </MastheadMain>
     </Masthead>
@@ -53,6 +60,9 @@ const App: React.FC = () => {
         </NavItem>
         <NavItem to="/builds" isActive={window.location.pathname === '/builds'}>
           <ListIcon /> Build List
+        </NavItem>
+        <NavItem to="/catalog" isActive={window.location.pathname === '/catalog'}>
+          <CatalogIcon /> Catalog
         </NavItem>
       </NavList>
     </Nav>
@@ -68,11 +78,18 @@ const App: React.FC = () => {
 
   return (
     <Router>
-      <Page masthead={masthead} sidebar={sidebar}>
+      <Page 
+        masthead={masthead} 
+        sidebar={sidebar}
+        mainContainerId={mainContentId}
+        skipToContent={<SkipToContent href={`#${mainContentId}`}>Skip to content</SkipToContent>}
+      >
+        <BackToTop scrollableSelector={`#${mainContentId}`} />
         <Routes>
           <Route path="/" element={<BuildListPage />} />
           <Route path="/builds" element={<BuildListPage />} />
           <Route path="/create" element={<CreateBuildPage />} />
+          <Route path="/catalog" element={<CatalogPage />} />
         </Routes>
       </Page>
     </Router>

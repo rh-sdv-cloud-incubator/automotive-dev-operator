@@ -24,7 +24,10 @@ import {
   Flex,
   FlexItem,
   ActionGroup,
-  ExpandableSection
+  ExpandableSection,
+  Content,
+  Stack,
+  StackItem
 } from '@patternfly/react-core';
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { CubesIcon, DownloadIcon, EyeIcon, RedoIcon } from '@patternfly/react-icons';
@@ -391,7 +394,7 @@ const BuildListPage: React.FC = () => {
 
   return (
     <PageSection>
-      <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }} style={{ marginBottom: '24px' }}>
+      <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }} className="pf-v6-u-mb-lg">
         <FlexItem>
           <Title headingLevel="h1" size="2xl">
             Image Builds
@@ -404,19 +407,19 @@ const BuildListPage: React.FC = () => {
           <Button
             variant="secondary"
             onClick={refreshBuilds}
-            style={{ marginLeft: '8px' }}
+            className="pf-v6-u-ml-sm"
             icon={<RedoIcon />}
           >
             Refresh
           </Button>
           {buildsConnecting && (
-            <Badge color="blue" style={{ marginLeft: '8px' }}>
-              <Spinner size="sm" style={{ marginRight: '4px' }} />
+            <Badge color="blue" className="pf-v6-u-ml-sm">
+              <Spinner size="sm" className="pf-v6-u-mr-xs" />
               Connecting...
             </Badge>
           )}
           {buildsError && (
-            <Badge color="red" style={{ marginLeft: '8px' }}>
+            <Badge color="red" className="pf-v6-u-ml-sm">
               Connection Error
             </Badge>
           )}
@@ -424,7 +427,7 @@ const BuildListPage: React.FC = () => {
       </Flex>
 
       {error && (
-        <Alert variant="danger" title={error} style={{ marginBottom: '24px' }} isInline />
+        <Alert variant="danger" title={error} className="pf-v6-u-mb-lg" isInline />
       )}
 
       <Card>
@@ -493,7 +496,7 @@ const BuildListPage: React.FC = () => {
                       <Button
                         variant="secondary"
                         onClick={() => applyBuildAsTemplate(build.name)}
-                        style={{ marginLeft: '8px' }}
+                        className="pf-v6-u-ml-sm"
                       >
                         Use as template
                       </Button>
@@ -504,7 +507,7 @@ const BuildListPage: React.FC = () => {
                           icon={<DownloadIcon />}
                           isLoading={downloadingArtifact === build.name}
                           isDisabled={!!downloadingArtifact}
-                          style={{ marginLeft: '8px' }}
+                          className="pf-v6-u-ml-sm"
                         >
                           {downloadingArtifact === build.name ? 'Downloading...' : 'Download'}
                         </Button>
@@ -528,82 +531,90 @@ const BuildListPage: React.FC = () => {
           <Tabs activeKey={activeTab} onSelect={(_event, tabIndex) => setActiveTab(tabIndex)}>
             <Tab eventKey={0} title={<TabTitleText>Details</TabTitleText>}>
               {loadingDetails ? (
-                <Bullseye style={{ height: '200px' }}>
+                <Bullseye className="pf-v6-u-h-200">
                   <Spinner />
                 </Bullseye>
               ) : buildDetails ? (
-                <div style={{ padding: '16px 0' }}>
-                  <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px' }}>
-                    <dt><strong>Name:</strong></dt>
-                    <dd>{buildDetails.name}</dd>
-                    <dt><strong>Requested By:</strong></dt>
-                    <dd>{buildDetails.requestedBy || '-'}</dd>
-                    <dt><strong>Status:</strong></dt>
-                    <dd>
-                      <Badge color={getPhaseVariant(buildDetails.phase)}>
-                        {buildDetails.phase}
-                      </Badge>
-                    </dd>
-                    <dt><strong>Message:</strong></dt>
-                    <dd>{buildDetails.message}</dd>
+                <div className="pf-v6-u-py-md">
+                  <Stack hasGutter>
+                    <StackItem>
+                      <Content><strong>Name:</strong> {buildDetails.name}</Content>
+                    </StackItem>
+                    <StackItem>
+                      <Content><strong>Requested By:</strong> {buildDetails.requestedBy || '-'}</Content>
+                    </StackItem>
+                    <StackItem>
+                      <Content>
+                        <strong>Status:</strong> <Badge color={getPhaseVariant(buildDetails.phase)}>{buildDetails.phase}</Badge>
+                      </Content>
+                    </StackItem>
+                    <StackItem>
+                      <Content><strong>Message:</strong> {buildDetails.message}</Content>
+                    </StackItem>
                     {buildDetails.startTime && (
-                      <>
-                        <dt><strong>Started:</strong></dt>
-                        <dd>{new Date(buildDetails.startTime).toLocaleString()}</dd>
-                      </>
+                      <StackItem>
+                        <Content><strong>Started:</strong> {new Date(buildDetails.startTime).toLocaleString()}</Content>
+                      </StackItem>
                     )}
                     {buildDetails.completionTime && (
                       <>
-                        <dt><strong>Completed:</strong></dt>
-                        <dd>{new Date(buildDetails.completionTime).toLocaleString()}</dd>
-                        <dt><strong>Duration:</strong></dt>
-                        <dd>{(() => {
-                          const s = new Date(buildDetails.startTime || '').getTime();
-                          const e = new Date(buildDetails.completionTime || '').getTime();
-                          if (!isFinite(s) || !isFinite(e) || e < s) return '-';
-                          const total = Math.floor((e - s) / 1000);
-                          const hh = Math.floor(total / 3600);
-                          const mm = Math.floor((total % 3600) / 60);
-                          const ss = total % 60;
-                          return hh > 0 ? `${hh}h ${mm}m ${ss}s` : `${mm}m ${ss}s`;
-                        })()}</dd>
+                        <StackItem>
+                          <Content><strong>Completed:</strong> {new Date(buildDetails.completionTime).toLocaleString()}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Duration:</strong> {(() => {
+                            const s = new Date(buildDetails.startTime || '').getTime();
+                            const e = new Date(buildDetails.completionTime || '').getTime();
+                            if (!isFinite(s) || !isFinite(e) || e < s) return '-';
+                            const total = Math.floor((e - s) / 1000);
+                            const hh = Math.floor(total / 3600);
+                            const mm = Math.floor((total % 3600) / 60);
+                            const ss = total % 60;
+                            return hh > 0 ? `${hh}h ${mm}m ${ss}s` : `${mm}m ${ss}s`;
+                          })()}</Content>
+                        </StackItem>
                       </>
                     )}
                     {buildParams && (
                       <>
-                        <dt><strong>Distro:</strong></dt>
-                        <dd>{buildParams.distro || '-'}</dd>
-                        <dt><strong>Target:</strong></dt>
-                        <dd>{buildParams.target || '-'}</dd>
-                        <dt><strong>Architecture:</strong></dt>
-                        <dd>{buildParams.architecture || '-'}</dd>
-                        <dt><strong>Export format:</strong></dt>
-                        <dd>{buildParams.exportFormat || '-'}</dd>
-                        <dt><strong>Mode:</strong></dt>
-                        <dd>{buildParams.mode || '-'}</dd>
-                        <dt><strong>Image Builder:</strong></dt>
-                        <dd style={{ wordBreak: 'break-all' }}>{buildParams.automotiveImageBuilder || '-'}</dd>
-                        <dt><strong>Compression:</strong></dt>
-                        <dd>{buildParams.compression || 'lz4'}</dd>
+                        <StackItem>
+                          <Content><strong>Distro:</strong> {buildParams.distro || '-'}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Target:</strong> {buildParams.target || '-'}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Architecture:</strong> {buildParams.architecture || '-'}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Export format:</strong> {buildParams.exportFormat || '-'}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Mode:</strong> {buildParams.mode || '-'}</Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Image Builder:</strong> <span className="pf-v6-u-word-break-break-all">{buildParams.automotiveImageBuilder || '-'}</span></Content>
+                        </StackItem>
+                        <StackItem>
+                          <Content><strong>Compression:</strong> {buildParams.compression || 'lz4'}</Content>
+                        </StackItem>
                       </>
                     )}
                     {buildDetails.artifactURL && (
-                      <>
-                        <dt><strong>Artifact URL:</strong></dt>
-                        <dd>{buildDetails.artifactURL}</dd>
-                      </>
+                      <StackItem>
+                        <Content><strong>Artifact URL:</strong> {buildDetails.artifactURL}</Content>
+                      </StackItem>
                     )}
                     {buildDetails.artifactFileName && (
-                      <>
-                        <dt><strong>Artifact File:</strong></dt>
-                        <dd>{buildDetails.artifactFileName}</dd>
-                      </>
+                      <StackItem>
+                        <Content><strong>Artifact File:</strong> {buildDetails.artifactFileName}</Content>
+                      </StackItem>
                     )}
-                  </dl>
+                  </Stack>
 
                   {buildDetails.phase === 'Completed' && selectedBuild && (
-                    <div style={{ marginTop: '24px' }}>
-                      <ActionGroup style={{ marginBottom: '16px' }}>
+                    <div className="pf-v6-u-mt-lg">
+                      <ActionGroup className="pf-v6-u-mb-md">
                         <Button
                           variant="secondary"
                           onClick={() => downloadArtifact(selectedBuild)}
@@ -618,7 +629,6 @@ const BuildListPage: React.FC = () => {
                         <Button
                           variant="tertiary"
                           onClick={() => fetchArtifactItems(selectedBuild)}
-                          style={{ marginLeft: '8px' }}
                           isLoading={loadingItems}
                           isDisabled={loadingItems}
                         >
@@ -626,19 +636,19 @@ const BuildListPage: React.FC = () => {
                         </Button>
                       </ActionGroup>
                       {loadingItems && (
-                        <div style={{ marginBottom: '12px' }}>
+                        <div className="pf-v6-u-mb-sm">
                           <Spinner size="md" /> Loading items…
                         </div>
                       )}
                       {artifactItems && artifactItems.length > 0 && (
-                        <div style={{ marginBottom: '16px' }}>
+                        <div className="pf-v6-u-mb-md">
                           <Alert
                             variant="success"
                             title="Individual Artifact Parts Available"
                             isInline
-                            style={{ marginBottom: '12px' }}
+                            className="pf-v6-u-mb-sm"
                           >
-                            <p>The following individual compressed parts are available for download. This allows you to download only specific components instead of the complete archive.</p>
+                            <Content component="p">The following individual compressed parts are available for download. This allows you to download only specific components instead of the complete archive.</Content>
                           </Alert>
                           <Table aria-label="Artifact items table">
                             <Thead>
@@ -662,13 +672,13 @@ const BuildListPage: React.FC = () => {
                                     >
                                       {downloadingItem === it.name ? 'Downloading…' : 'Download'}
                                     </Button>
-                                    <div style={{ marginTop: '8px' }}>
+                                    <div className="pf-v6-u-mt-xs">
                                       <ExpandableSection
                                         toggleText={expandedItem === it.name ? 'Hide command' : 'Show command'}
                                         isExpanded={expandedItem === it.name}
                                         onToggle={() => setExpandedItem(expandedItem === it.name ? null : it.name)}
                                       >
-                                        <div style={{ marginBottom: '8px' }}>
+                                        <div className="pf-v6-u-mb-xs">
                                           <CodeBlock>
                                             <CodeBlockCode>
 {`GET ${BUILD_API_BASE || (API_BASE ? API_BASE : window.location.origin)}/v1/builds/${selectedBuild}/artifacts/${encodeURIComponent(it.name)}`}
@@ -676,7 +686,7 @@ const BuildListPage: React.FC = () => {
                                           </CodeBlock>
                                         </div>
                                         <div>
-                                          <p style={{ marginTop: 0, marginBottom: '8px' }}>Example with curl:</p>
+                                          <p className="pf-v6-u-mt-0 pf-v6-u-mb-xs">Example with curl:</p>
                                           <CodeBlock>
                                             <CodeBlockCode>
 {`TOKEN=$(oc whoami -t)
@@ -706,11 +716,11 @@ curl -H "Authorization: Bearer $TOKEN" \
                         {buildDetails?.artifactFileName && (
                           <>
                             {(buildDetails.artifactFileName.includes('.tar.') || buildDetails.artifactFileName.includes('.zip')) && (
-                              <p style={{ marginBottom: '8px', fontWeight: 'bold' }}>
+                              <p className="pf-v6-u-mb-xs pf-v6-u-font-weight-bold">
                                 This is a packaged archive containing all build artifacts. Use the "Artifacts" button above to download individual parts.
                               </p>
                             )}
-                            <p style={{ marginBottom: '8px' }}>
+                            <p className="pf-v6-u-mb-xs">
                               Direct file URL:
                             </p>
                             <CodeBlock>
@@ -718,7 +728,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 {`GET ${(buildDetails.artifactURL || API_BASE || window.location.origin).replace(/\/$/, '')}/v1/builds/${selectedBuild}/artifact/${buildDetails.artifactFileName}`}
                               </CodeBlockCode>
                             </CodeBlock>
-                            <p style={{ marginTop: '8px', marginBottom: '8px' }}>
+                            <p className="pf-v6-u-mt-xs pf-v6-u-mb-xs">
                               Example with curl:
                             </p>
                             <CodeBlock>
@@ -742,8 +752,8 @@ curl -H "Authorization: Bearer $TOKEN" \\
               eventKey={1}
               title={<TabTitleText>Logs</TabTitleText>}
             >
-              <div style={{ padding: '16px 0' }}>
-                <Flex style={{ marginBottom: '16px' }}>
+              <div className="pf-v6-u-py-md">
+                <Flex className="pf-v6-u-mb-md">
                   <FlexItem>
                     <Button
                       variant="secondary"
@@ -757,7 +767,7 @@ curl -H "Authorization: Bearer $TOKEN" \\
                       <Button
                         variant="tertiary"
                         onClick={stopStream}
-                        style={{ marginLeft: '8px' }}
+                        className="pf-v6-u-ml-sm"
                       >
                         Stop Stream
                       </Button>
@@ -766,27 +776,27 @@ curl -H "Authorization: Bearer $TOKEN" \\
                   <FlexItem>
                     {isStreaming && (
                       <Badge isRead>
-                        <Spinner size="sm" style={{ marginRight: '8px' }} />
+                        <Spinner size="sm" className="pf-v6-u-mr-xs" />
                         Streaming...
                       </Badge>
                     )}
                     {isConnected && (
-                      <Badge style={{ marginLeft: '8px' }} color="green">
+                      <Badge className="pf-v6-u-ml-sm" color="green">
                         Connected
                       </Badge>
                     )}
                     {logStreamError && (
-                      <Badge style={{ marginLeft: '8px' }} color="red">
+                      <Badge className="pf-v6-u-ml-sm" color="red">
                         Error: {logStreamError}
                       </Badge>
                     )}
                     {autoRefresh && (
-                      <Badge style={{ marginLeft: '8px' }}>
+                      <Badge className="pf-v6-u-ml-sm">
                         Auto-refresh enabled
                       </Badge>
                     )}
                     {currentStep && (
-                      <Badge style={{ marginLeft: '8px' }} color="blue">
+                      <Badge className="pf-v6-u-ml-sm" color="blue">
                         Step: {currentStep}
                       </Badge>
                     )}
@@ -794,7 +804,7 @@ curl -H "Authorization: Bearer $TOKEN" \\
                 </Flex>
                 <div
                   ref={logContainerRef}
-                  style={{ maxHeight: '60vh', overflowY: 'auto', border: '1px solid #d2d2d2', borderRadius: 4 }}
+                  className="pf-v6-u-max-height-60vh pf-v6-u-overflow-y-auto pf-v6-u-border-width-sm pf-v6-u-border-color-200 pf-v6-u-border-radius-sm"
                 >
                   <CodeBlock>
                     <CodeBlockCode>
