@@ -41,6 +41,7 @@ import (
 
 	automotivev1 "github.com/rh-sdv-cloud-incubator/automotive-dev-operator/api/v1"
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/automotivedev"
+	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/image"
 	"github.com/rh-sdv-cloud-incubator/automotive-dev-operator/internal/controller/imagebuild"
 	// +kubebuilder:scaffold:imports
 )
@@ -159,6 +160,17 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Log:    ctrl.Log.WithName("controllers").WithName("ImageBuild"),
+	}
+
+	imageReconciler := &image.ImageReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("Image"),
+	}
+
+	if err = imageReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Image")
+		os.Exit(1)
 	}
 
 	go func() {

@@ -28,4 +28,6 @@ resources:
 - automotivedev_viewer_role.yaml
 - imagebuild_editor_role.yaml
 - imagebuild_viewer_role.yaml
+- image_editor_role.yaml
+- image_viewer_role.yaml
 

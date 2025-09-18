@@ -54,6 +54,7 @@ rules:
   resources:
   - automotivedevs
   - imagebuilds
+  - images
   verbs:
   - create
   - delete
@@ -67,6 +68,7 @@ rules:
   resources:
   - automotivedevs/finalizers
   - imagebuilds/finalizers
+  - images/finalizers
   verbs:
   - update
 - apiGroups:
@@ -74,6 +76,7 @@ rules:
   resources:
   - automotivedevs/status
   - imagebuilds/status
+  - images/status
   verbs:
   - get
   - patch
