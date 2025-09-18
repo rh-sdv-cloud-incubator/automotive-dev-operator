@@ -28,49 +28,15 @@ import {
   Label,
   Content
 } from '@patternfly/react-core';
-import { 
-  DownloadIcon, 
+import {
+  DownloadIcon,
   CubesIcon,
   TagIcon,
   CalendarAltIcon,
   UserIcon
 } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
-import { authFetch, API_BASE } from '../utils/auth';
-
-interface BuildListItem {
-  name: string;
-  phase: string;
-  message: string;
-  requestedBy?: string;
-  createdAt: string;
-  startTime?: string;
-  completionTime?: string;
-}
-
-interface BuildDetails {
-  name: string;
-  phase: string;
-  message: string;
-  requestedBy?: string;
-  artifactURL?: string;
-  artifactFileName?: string;
-  startTime?: string;
-  completionTime?: string;
-}
-
-interface BuildParams {
-  name: string;
-  manifest?: string;
-  manifestFileName?: string;
-  distro?: string;
-  target?: string;
-  architecture?: string;
-  exportFormat?: string;
-  mode?: string;
-  automotiveImageBuilder?: string;
-  compression?: string;
-}
+// import { authFetch, API_BASE } from '../utils/auth';
 
 interface CatalogItem {
   id: string;
@@ -98,68 +64,25 @@ const CatalogPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
 
-  // Mock data for initial layout - will be replaced with real API calls
-  const mockCatalogItems: CatalogItem[] = [
-    {
-      id: '1',
-      name: 'Base RHEL 9 Image',
-      description: 'A minimal RHEL 9 base image optimized for automotive applications',
-      version: '1.0.0',
-      tags: ['rhel', 'base', 'automotive'],
-      author: 'Red Hat',
-      createdAt: '2024-01-15T10:30:00Z',
-      downloadCount: 127,
-      size: '2.1 GB',
-      architecture: 'x86_64',
-      distro: 'rhel-9'
-    },
-    {
-      id: '2',
-      name: 'CentOS Stream 9 Development',
-      description: 'Development environment with common automotive development tools',
-      version: '2.1.0',
-      tags: ['centos', 'development', 'tools'],
-      author: 'Automotive Team',
-      createdAt: '2024-01-20T14:45:00Z',
-      downloadCount: 89,
-      size: '3.7 GB',
-      architecture: 'aarch64',
-      distro: 'centos-stream-9'
-    },
-    {
-      id: '3',
-      name: 'Fedora IoT Base',
-      description: 'Lightweight Fedora IoT image for edge computing applications',
-      version: '1.5.2',
-      tags: ['fedora', 'iot', 'edge'],
-      author: 'IoT Team',
-      createdAt: '2024-02-01T09:15:00Z',
-      downloadCount: 203,
-      size: '1.8 GB',
-      architecture: 'x86_64',
-      distro: 'fedora-iot'
-    }
-  ];
 
   const fetchCatalogItems = async () => {
     try {
       setLoading(true);
       setError(null);
-      
-      // TODO: Replace with actual API call
+
+      // TODO: Replace with actual API call when catalog API is implemented
       // const response = await authFetch(`${API_BASE}/catalog`);
       // const data = await response.json();
       // setCatalogItems(data.items || []);
-      
-      // For now, use mock data
-      setTimeout(() => {
-        setCatalogItems(mockCatalogItems);
-        setLoading(false);
-      }, 1000);
-      
+
+      // For now, show empty catalog
+      setCatalogItems([]);
+
     } catch (err) {
       console.error('Error fetching catalog items:', err);
       setError('Failed to load catalog items');
+      setCatalogItems([]);
+    } finally {
       setLoading(false);
     }
   };
@@ -171,16 +94,16 @@ const CatalogPage: React.FC = () => {
   const handleDownload = async (item: CatalogItem) => {
     try {
       setDownloadingItem(item.id);
-      
+
       // TODO: Implement actual download logic
       console.log('Downloading item:', item.name);
-      
+
       // Simulate download delay
       setTimeout(() => {
         setDownloadingItem(null);
         // TODO: Trigger actual download
       }, 2000);
-      
+
     } catch (err) {
       console.error('Error downloading item:', err);
       setDownloadingItem(null);
@@ -189,8 +112,8 @@ const CatalogPage: React.FC = () => {
 
   const handleUseAsTemplate = (item: CatalogItem) => {
     // Navigate to create build page with this item as a template
-    navigate('/create', { 
-      state: { 
+    navigate('/create', {
+      state: {
         template: {
           name: item.name,
           distro: item.distro,
@@ -308,13 +231,13 @@ const CatalogPage: React.FC = () => {
                           </SplitItem>
                         </Split>
                       </StackItem>
-                      
+
                       <StackItem>
                         <Content component="small">
                           {item.description || 'No description available'}
                         </Content>
                       </StackItem>
-                      
+
                       <StackItem>
                         <Flex spaceItems={{ default: 'spaceItemsXs' }}>
                           {item.tags.map((tag) => (
@@ -326,7 +249,7 @@ const CatalogPage: React.FC = () => {
                           ))}
                         </Flex>
                       </StackItem>
-                      
+
                       <StackItem>
                         <Split>
                           <SplitItem>
@@ -343,7 +266,7 @@ const CatalogPage: React.FC = () => {
                           </SplitItem>
                         </Split>
                       </StackItem>
-                      
+
                       <StackItem>
                         <Split>
                           <SplitItem>
@@ -359,9 +282,9 @@ const CatalogPage: React.FC = () => {
                           </SplitItem>
                         </Split>
                       </StackItem>
-                      
+
                       <Divider />
-                      
+
                       <StackItem>
                         <Flex>
                           <FlexItem>
@@ -416,7 +339,7 @@ const CatalogPage: React.FC = () => {
                   {selectedItem.description || 'No description available'}
                 </Content>
               </StackItem>
-              
+
               <StackItem>
                 <Split hasGutter>
                   <SplitItem>
@@ -430,7 +353,7 @@ const CatalogPage: React.FC = () => {
                   </SplitItem>
                 </Split>
               </StackItem>
-              
+
               <StackItem>
                 <Split hasGutter>
                   <SplitItem>
@@ -444,7 +367,7 @@ const CatalogPage: React.FC = () => {
                   </SplitItem>
                 </Split>
               </StackItem>
-              
+
               {selectedItem.author && (
                 <StackItem>
                   <Content>
@@ -453,7 +376,7 @@ const CatalogPage: React.FC = () => {
                   </Content>
                 </StackItem>
               )}
-              
+
               <StackItem>
                 <Content><strong>Tags:</strong></Content>
                 <Flex spaceItems={{ default: 'spaceItemsXs' }} className="pf-v6-u-mt-xs">
