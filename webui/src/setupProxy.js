@@ -38,14 +38,10 @@ module.exports = function(app) {
     }
   };
 
-  // SSE endpoints MUST be defined BEFORE the general /v1 proxy
-  // Test SSE endpoint
-  app.use('/v1/test-sse', createProxyMiddleware(sseProxyConfig));
+  app.use('/v1/builds/sse', createProxyMiddleware(sseProxyConfig));
 
-  // Logs SSE endpoint
   app.use('/v1/builds/:name/logs/sse', createProxyMiddleware(sseProxyConfig));
 
-  // Regular proxy for other endpoints (this catches everything else under /v1)
   app.use(
     '/v1',
     createProxyMiddleware({

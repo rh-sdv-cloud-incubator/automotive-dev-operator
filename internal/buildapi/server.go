@@ -114,23 +114,13 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/sse", a.handleStreamBuildsSSE)
 			buildsGroup.GET("/:name", a.handleGetBuild)
 			buildsGroup.GET("/:name/logs", a.handleStreamLogs)
+			buildsGroup.GET("/:name/logs/sse", a.handleStreamLogsSSE)
 			buildsGroup.GET("/:name/artifacts", a.handleListArtifacts)
 			buildsGroup.GET("/:name/artifacts/:file", a.handleStreamArtifactPart)
 			buildsGroup.GET("/:name/artifact/:filename", a.handleStreamArtifactByFilename)
 			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
 			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
 		}
-
-		// SSE endpoint without authentication middleware for testing
-		v1.GET("/builds/:name/logs/sse", a.handleStreamLogsSSE)
-
-		// Simple test SSE endpoint
-		v1.GET("/test-sse", a.handleTestSSE)
-
-		// Simple test endpoint to verify proxy is working
-		v1.GET("/test", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "Test endpoint working", "timestamp": time.Now().Unix()})
-		})
 	}
 
 	return router
@@ -186,41 +176,12 @@ func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("logs SSE requested", "build", name, "reqID", c.GetString("reqID"))
 
-	// Temporarily bypass authentication for testing
 	streamLogsSSE(c, name)
 }
 
 func (a *APIServer) handleStreamBuildsSSE(c *gin.Context) {
 	a.log.Info("builds SSE requested", "reqID", c.GetString("reqID"))
 	streamBuildsSSE(c)
-}
-
-func (a *APIServer) handleTestSSE(c *gin.Context) {
-	a.log.Info("test SSE requested", "reqID", c.GetString("reqID"))
-
-	// Set up SSE response headers
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-
-	c.Writer.WriteHeader(http.StatusOK)
-
-	// Send test events
-	sendSSEEvent(c, "connected", "", "Test SSE connection established")
-	c.Writer.Flush()
-
-	// Send some test log events
-	for i := 1; i <= 5; i++ {
-		time.Sleep(1 * time.Second)
-		sendSSEEvent(c, "log", "test-step", fmt.Sprintf("Test log message %d", i))
-		c.Writer.Flush()
-	}
-
-	sendSSEEvent(c, "completed", "", "Test completed")
-	c.Writer.Flush()
 }
 
 func (a *APIServer) handleListArtifacts(c *gin.Context) {

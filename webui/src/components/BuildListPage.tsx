@@ -346,7 +346,7 @@ const BuildListPage: React.FC = () => {
       }
       const template = await resp.json();
       sessionStorage.setItem('aib-template', JSON.stringify(template));
-      navigate('/', { state: { template } });
+      navigate('/create', { state: { template } });
     } catch (err) {
       setError(`Error using as template: ${err}`);
     }
@@ -642,14 +642,6 @@ const BuildListPage: React.FC = () => {
                       )}
                       {artifactItems && artifactItems.length > 0 && (
                         <div className="pf-v6-u-mb-md">
-                          <Alert
-                            variant="success"
-                            title="Individual Artifact Parts Available"
-                            isInline
-                            className="pf-v6-u-mb-sm"
-                          >
-                            <Content component="p">The following individual compressed parts are available for download. This allows you to download only specific components instead of the complete archive.</Content>
-                          </Alert>
                           <Table aria-label="Artifact items table">
                             <Thead>
                               <Tr>
