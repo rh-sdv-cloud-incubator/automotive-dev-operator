@@ -86,12 +86,10 @@ func (a *APIServer) createRouter() *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	// Add request ID and logging middleware
 	router.Use(func(c *gin.Context) {
 		reqID := uuid.New().String()
 		c.Set("reqID", reqID)
 		a.log.Info("http request", "method", c.Request.Method, "path", c.Request.URL.Path, "reqID", reqID)
-		fmt.Printf("HTTP Request: %s %s\n", c.Request.Method, c.Request.URL.Path)
 		c.Next()
 	})
 
@@ -105,16 +103,18 @@ func (a *APIServer) createRouter() *gin.Engine {
 			c.Data(http.StatusOK, "application/yaml", embeddedOpenAPI)
 		})
 
+		// SSE endpoints without authentication (handled by OAuth proxy)
+		v1.GET("/builds/sse", a.handleStreamBuildsSSE)
+		v1.GET("/builds/:name/logs/sse", a.handleStreamLogsSSE)
+
 		// Builds endpoints with authentication middleware
 		buildsGroup := v1.Group("/builds")
 		buildsGroup.Use(a.authMiddleware())
 		{
 			buildsGroup.POST("", a.handleCreateBuild)
 			buildsGroup.GET("", a.handleListBuilds)
-			buildsGroup.GET("/sse", a.handleStreamBuildsSSE)
 			buildsGroup.GET("/:name", a.handleGetBuild)
 			buildsGroup.GET("/:name/logs", a.handleStreamLogs)
-			buildsGroup.GET("/:name/logs/sse", a.handleStreamLogsSSE)
 			buildsGroup.GET("/:name/artifacts", a.handleListArtifacts)
 			buildsGroup.GET("/:name/artifacts/:file", a.handleStreamArtifactPart)
 			buildsGroup.GET("/:name/artifact/:filename", a.handleStreamArtifactByFilename)
@@ -141,7 +141,7 @@ func StartServer(addr string, logger logr.Logger) (*http.Server, error) {
 // authMiddleware provides authentication middleware for Gin
 func (a *APIServer) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !isAuthenticated(c) {
+		if !a.isAuthenticated(c) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
@@ -181,7 +181,7 @@ func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
 
 func (a *APIServer) handleStreamBuildsSSE(c *gin.Context) {
 	a.log.Info("builds SSE requested", "reqID", c.GetString("reqID"))
-	streamBuildsSSE(c)
+	a.streamBuildsSSE(c)
 }
 
 func (a *APIServer) handleListArtifacts(c *gin.Context) {
@@ -476,7 +476,7 @@ func streamLogsSSE(c *gin.Context, name string) {
 	streamed := make(map[string]bool)
 	var lastErrs []string
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	go func() {
@@ -617,50 +617,39 @@ func streamLogsSSE(c *gin.Context, name string) {
 	c.Writer.Flush()
 }
 
-func streamBuildsSSE(c *gin.Context) {
+func (a *APIServer) streamBuildsSSE(c *gin.Context) {
+	fmt.Printf("DEBUG: streamBuildsSSE function started\n")
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	fmt.Printf("DEBUG: About to write header\n")
 	c.Writer.WriteHeader(http.StatusOK)
-
-	reqID := c.GetString("reqID")
-	log := logr.FromContextOrDiscard(c.Request.Context())
-	log.Info("SSE: Headers set, about to send connected event", "reqID", reqID)
+	fmt.Printf("DEBUG: Header written\n")
 
 	sendSSEEvent(c, "connected", "", "Builds stream connected")
-	log.Info("SSE: Connected event sent, about to flush", "reqID", reqID)
-
 	c.Writer.Flush()
-	log.Info("SSE: Flushed, starting main logic", "reqID", reqID)
 
-	log.Info("SSE: Resolving namespace", "reqID", reqID)
 	namespace := resolveNamespace()
-	log.Info("SSE: Namespace resolved", "reqID", reqID, "namespace", namespace)
 
-	log.Info("SSE: Getting k8s client", "reqID", reqID)
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
-		log.Error(err, "SSE: Client error", "reqID", reqID)
 		sendSSEEvent(c, "error", "", fmt.Sprintf("Client error: %v", err))
 		c.Writer.Flush()
 		return
 	}
-	log.Info("SSE: K8s client created successfully", "reqID", reqID)
 
 	ctx := c.Request.Context()
 
-	log.Info("SSE: Listing builds", "reqID", reqID)
+	// Send initial list of builds
 	var buildList automotivev1.ImageBuildList
 	if err := k8sClient.List(ctx, &buildList, client.InNamespace(namespace)); err != nil {
-		log.Error(err, "SSE: List builds error", "reqID", reqID)
 		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
 		c.Writer.Flush()
 		return
 	}
-	log.Info("SSE: Found builds", "reqID", reqID, "count", len(buildList.Items))
 
 	builds := convertImageBuildList(&buildList)
 	buildsData, err := json.Marshal(builds)
@@ -681,7 +670,7 @@ func streamBuildsSSE(c *gin.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	pingTicker := time.NewTicker(30 * time.Second)
+	pingTicker := time.NewTicker(15 * time.Second)
 	defer pingTicker.Stop()
 
 	for {
@@ -754,11 +743,6 @@ func convertImageBuildList(list *automotivev1.ImageBuildList) []BuildListItem {
 		resp = append(resp, convertImageBuildToListItem(&b))
 	}
 	return resp
-}
-
-// convertImageBuild converts a Kubernetes ImageBuild to the API response format
-func convertImageBuild(b *automotivev1.ImageBuild) BuildListItem {
-	return convertImageBuildToListItem(b)
 }
 
 // convertImageBuildToListItem converts a single ImageBuild to BuildListItem
@@ -1899,7 +1883,7 @@ func getClientFromRequest(c *gin.Context) (client.Client, error) {
 	return k8sClient, nil
 }
 
-func isAuthenticated(c *gin.Context) bool {
+func (a *APIServer) isAuthenticated(c *gin.Context) bool {
 	authHeader := c.Request.Header.Get("Authorization")
 	token := ""
 	token, _ = strings.CutPrefix(authHeader, "Bearer ")
