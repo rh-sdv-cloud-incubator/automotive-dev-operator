@@ -71,7 +71,7 @@ func (a *APIServer) Start(ctx context.Context) error {
 	<-ctx.Done()
 	a.log.Info("shutting down build-api server...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := a.server.Shutdown(shutdownCtx); err != nil {
@@ -626,30 +626,42 @@ func streamBuildsSSE(c *gin.Context) {
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)
 
-	namespace := resolveNamespace()
+	reqID := c.GetString("reqID")
+	log := logr.FromContextOrDiscard(c.Request.Context())
+	log.Info("SSE: Headers set, about to send connected event", "reqID", reqID)
 
+	sendSSEEvent(c, "connected", "", "Builds stream connected")
+	log.Info("SSE: Connected event sent, about to flush", "reqID", reqID)
+
+	c.Writer.Flush()
+	log.Info("SSE: Flushed, starting main logic", "reqID", reqID)
+
+	log.Info("SSE: Resolving namespace", "reqID", reqID)
+	namespace := resolveNamespace()
+	log.Info("SSE: Namespace resolved", "reqID", reqID, "namespace", namespace)
+
+	log.Info("SSE: Getting k8s client", "reqID", reqID)
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
+		log.Error(err, "SSE: Client error", "reqID", reqID)
 		sendSSEEvent(c, "error", "", fmt.Sprintf("Client error: %v", err))
 		c.Writer.Flush()
 		return
 	}
+	log.Info("SSE: K8s client created successfully", "reqID", reqID)
 
 	ctx := c.Request.Context()
 
-	// Send initial connection event
-	sendSSEEvent(c, "connected", "", "Builds stream connected")
-	c.Writer.Flush()
-
-	// Send initial list of builds
+	log.Info("SSE: Listing builds", "reqID", reqID)
 	var buildList automotivev1.ImageBuildList
 	if err := k8sClient.List(ctx, &buildList, client.InNamespace(namespace)); err != nil {
+		log.Error(err, "SSE: List builds error", "reqID", reqID)
 		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
 		c.Writer.Flush()
 		return
 	}
+	log.Info("SSE: Found builds", "reqID", reqID, "count", len(buildList.Items))
 
-	// Convert and send initial builds
 	builds := convertImageBuildList(&buildList)
 	buildsData, err := json.Marshal(builds)
 	if err != nil {
@@ -661,13 +673,11 @@ func streamBuildsSSE(c *gin.Context) {
 	sendSSEEvent(c, "initial-list", "", string(buildsData))
 	c.Writer.Flush()
 
-	// Store the last known state of builds for comparison
 	lastBuilds := make(map[string]BuildListItem)
 	for _, build := range builds {
 		lastBuilds[build.Name] = build
 	}
 
-	// Send keepalive pings and poll for changes
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -771,7 +781,6 @@ func convertImageBuildToListItem(b *automotivev1.ImageBuild) BuildListItem {
 	}
 }
 
-// sendSSEEvent sends a Server-Sent Event
 func sendSSEEvent(c *gin.Context, event, step, data string) {
 	if event != "" {
 		c.Writer.WriteString("event: " + event + "\n")
@@ -780,7 +789,6 @@ func sendSSEEvent(c *gin.Context, event, step, data string) {
 		c.Writer.WriteString("id: " + step + "\n")
 	}
 	if data != "" {
-		// Escape newlines in data
 		escapedData := strings.ReplaceAll(data, "\n", "\\n")
 		c.Writer.WriteString("data: " + escapedData + "\n")
 	}
