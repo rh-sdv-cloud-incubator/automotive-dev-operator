@@ -58,7 +58,9 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
   }, []);
 
   const connect = useCallback(async () => {
+    console.log('[useSSE] connect() called, url:', url, 'existing controller:', !!abortControllerRef.current);
     if (!url || abortControllerRef.current) {
+      console.log('[useSSE] connect() aborted - no url or controller exists');
       return;
     }
 
@@ -72,6 +74,8 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
       abortControllerRef.current = abortController;
 
       const finalUrl = url.startsWith('/v1') ? url : (url.startsWith('http') ? url : `/${url}`);
+      console.log('[useSSE] Fetching:', finalUrl);
+      console.log('[useSSE] Document cookies available:', document.cookie ? 'yes' : 'no');
 
       const response = await fetch(finalUrl, {
         method: 'GET',
@@ -79,7 +83,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache',
         },
-        credentials: 'include',
+        credentials: 'same-origin', // Changed from 'include' to 'same-origin'
         signal: abortController.signal,
       });
 
@@ -184,6 +188,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
   }, [url, onMessage, onError, onOpen, autoReconnect, reconnectInterval, maxReconnectAttempts, cleanup]);
 
   const disconnect = useCallback(() => {
+    console.log('[useSSE] disconnect() called');
     shouldReconnectRef.current = false;
     cleanup();
     setIsConnected(false);
@@ -193,6 +198,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
 
   // Auto-connect when URL changes
   useEffect(() => {
+    console.log('[useSSE] useEffect triggered, url:', url);
     if (url) {
       connect();
     } else {
@@ -200,16 +206,17 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
     }
 
     return () => {
+      console.log('[useSSE] useEffect cleanup running');
       disconnect();
     };
-  }, [url, connect, disconnect]);
+  }, [url]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       disconnect();
     };
-  }, [disconnect]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     isConnected,
