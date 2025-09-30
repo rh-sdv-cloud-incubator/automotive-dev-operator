@@ -59,8 +59,8 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
 
   const connect = useCallback(async () => {
     console.log('[useSSE] connect() called, url:', url, 'existing controller:', !!abortControllerRef.current);
-    if (!url || abortControllerRef.current) {
-      console.log('[useSSE] connect() aborted - no url or controller exists');
+    if (!url) {
+      console.log('[useSSE] connect() aborted - no url');
       return;
     }
 
@@ -70,120 +70,89 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
     shouldReconnectRef.current = true;
 
     try {
-      const abortController = new AbortController();
-      abortControllerRef.current = abortController;
-
       const finalUrl = url.startsWith('/v1') ? url : (url.startsWith('http') ? url : `/${url}`);
-      console.log('[useSSE] Fetching:', finalUrl);
-      console.log('[useSSE] Document cookies available:', document.cookie ? 'yes' : 'no');
+      console.log('[useSSE] Connecting to EventSource:', finalUrl);
 
-      const response = await fetch(finalUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        },
-        credentials: 'same-origin', // Changed from 'include' to 'same-origin'
-        signal: abortController.signal,
+      const eventSource = new EventSource(finalUrl, { withCredentials: true });
+      abortControllerRef.current = { abort: () => eventSource.close() } as any;
+
+      eventSource.onopen = () => {
+        console.log('[useSSE] EventSource opened');
+        setIsConnected(true);
+        setIsConnecting(false);
+        setError(null);
+        reconnectAttemptsRef.current = 0;
+        onOpen?.();
+      };
+
+      eventSource.onerror = (err) => {
+        console.error('[useSSE] EventSource error:', err);
+        setIsConnected(false);
+        setIsConnecting(false);
+        setError('Connection error');
+        onError?.(err as Event);
+        eventSource.close();
+
+        if (shouldReconnectRef.current && autoReconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
+          reconnectAttemptsRef.current++;
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (shouldReconnectRef.current) {
+              connect();
+            }
+          }, reconnectInterval);
+        }
+      };
+
+      eventSource.onmessage = (event) => {
+        const message: SSEMessage = {
+          event: 'message',
+          data: event.data,
+          id: event.lastEventId || undefined,
+        };
+        setLastMessage(message);
+        onMessage?.(message);
+      };
+
+      // Handle custom event types
+      const originalAddEventListener = eventSource.addEventListener.bind(eventSource);
+      const eventTypes = new Set<string>();
+
+      // Intercept addEventListener to track custom events
+      (eventSource as any).addEventListener = (type: string, listener: any, options?: any) => {
+        if (type !== 'message' && type !== 'error' && type !== 'open' && !eventTypes.has(type)) {
+          eventTypes.add(type);
+          originalAddEventListener(type, (event: MessageEvent) => {
+            const message: SSEMessage = {
+              event: type,
+              data: event.data,
+              id: event.lastEventId || undefined,
+            };
+            setLastMessage(message);
+            onMessage?.(message);
+          });
+        }
+        return originalAddEventListener(type, listener, options);
+      };
+
+      // Manually handle known event types from your server
+      const knownEvents = ['connected', 'initial-list', 'ping', 'build-created', 'build-updated', 'build-deleted', 'error', 'disconnected'];
+      knownEvents.forEach(eventType => {
+        eventSource.addEventListener(eventType, (event: MessageEvent) => {
+          const message: SSEMessage = {
+            event: eventType,
+            data: event.data,
+            id: event.lastEventId || undefined,
+          };
+          setLastMessage(message);
+          onMessage?.(message);
+        });
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      if (!response.body) {
-        throw new Error('Response body is null');
-      }
-
-      setIsConnected(true);
-      setIsConnecting(false);
-      setError(null);
-      reconnectAttemptsRef.current = 0;
-      onOpen?.();
-
-          const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            console.log('SSE stream ended (done=true)');
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          let currentEvent = 'message';
-          let currentId: string | undefined = undefined;
-          let currentData = '';
-
-          const sendCurrentMessage = () => {
-            if (currentData) {
-              const message: SSEMessage = {
-                event: currentEvent,
-                data: currentData,
-                id: currentId,
-              };
-              setLastMessage(message);
-              onMessage?.(message);
-              // Reset for next message
-              currentEvent = 'message';
-              currentId = undefined;
-              currentData = '';
-            }
-          };
-
-          for (const line of lines) {
-            if (line.trim() === '') {
-              // Empty line indicates end of event, send the accumulated message
-              sendCurrentMessage();
-              continue;
-            }
-
-            if (line.startsWith('event:')) {
-              currentEvent = line.substring(6).trim();
-            } else if (line.startsWith('id:')) {
-              currentId = line.substring(3).trim();
-            } else if (line.startsWith('data:')) {
-              currentData = line.substring(5).trim();
-            }
-          }
-
-          // Send any remaining message at the end of the chunk
-          sendCurrentMessage();
-        }
-      } finally {
-        reader.releaseLock();
-      }
-
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        // Connection was aborted, don't treat as error
-        console.log('SSE connection aborted');
-        return;
-      }
-
-      console.error('SSE connection error:', err);
+      console.error('[useSSE] EventSource setup error:', err);
       setIsConnected(false);
       setIsConnecting(false);
       setError(err instanceof Error ? err.message : 'Unknown error');
-      onError?.(err as Event);
-
-      if (shouldReconnectRef.current && autoReconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
-        reconnectAttemptsRef.current++;
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (shouldReconnectRef.current) {
-            connect();
-          }
-        }, reconnectInterval);
-      } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-        setError(`Failed to reconnect after ${maxReconnectAttempts} attempts`);
-      }
     }
   }, [url, onMessage, onError, onOpen, autoReconnect, reconnectInterval, maxReconnectAttempts, cleanup]);
 
