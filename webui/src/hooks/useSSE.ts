@@ -41,24 +41,25 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
   const [error, setError] = useState<string | null>(null);
   const [lastMessage, setLastMessage] = useState<SSEMessage | null>(null);
 
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const shouldReconnectRef = useRef(true);
 
   const cleanup = useCallback(() => {
+    console.log('[useSSE] cleanup() - closing EventSource');
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
   }, []);
 
   const connect = useCallback(async () => {
-    console.log('[useSSE] connect() called, url:', url, 'existing controller:', !!abortControllerRef.current);
+    console.log('[useSSE] connect() called, url:', url, 'existing EventSource:', !!eventSourceRef.current);
     if (!url) {
       console.log('[useSSE] connect() aborted - no url');
       return;
@@ -76,7 +77,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
       console.log('[useSSE] Connecting to EventSource:', finalUrl);
 
       const eventSource = new EventSource(finalUrl, { withCredentials: true });
-      abortControllerRef.current = { abort: () => eventSource.close() } as any;
+      eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
         console.log('[useSSE] EventSource opened');
@@ -93,7 +94,12 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
         setIsConnecting(false);
         setError('Connection error');
         onError?.(err as Event);
-        eventSource.close();
+
+        // Close and cleanup
+        if (eventSourceRef.current === eventSource) {
+          eventSource.close();
+          eventSourceRef.current = null;
+        }
 
         if (shouldReconnectRef.current && autoReconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++;
@@ -115,28 +121,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
         onMessage?.(message);
       };
 
-      // Handle custom event types
-      const originalAddEventListener = eventSource.addEventListener.bind(eventSource);
-      const eventTypes = new Set<string>();
-
-      // Intercept addEventListener to track custom events
-      (eventSource as any).addEventListener = (type: string, listener: any, options?: any) => {
-        if (type !== 'message' && type !== 'error' && type !== 'open' && !eventTypes.has(type)) {
-          eventTypes.add(type);
-          originalAddEventListener(type, (event: MessageEvent) => {
-            const message: SSEMessage = {
-              event: type,
-              data: event.data,
-              id: event.lastEventId || undefined,
-            };
-            setLastMessage(message);
-            onMessage?.(message);
-          });
-        }
-        return originalAddEventListener(type, listener, options);
-      };
-
-      // Manually handle known event types for logs
+      // Register handlers for all known event types
       const knownEvents = ['connected', 'log', 'step', 'waiting', 'ping', 'completed', 'error', 'disconnected'];
       knownEvents.forEach(eventType => {
         eventSource.addEventListener(eventType, (event: MessageEvent) => {
@@ -167,7 +152,7 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
     onClose?.();
   }, [cleanup, onClose]);
 
-  // Auto-connect when URL changes
+  // Auto-connect when URL changes and cleanup on unmount
   useEffect(() => {
     console.log('[useSSE] useEffect triggered, url:', url);
     if (url) {
@@ -181,13 +166,6 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
       disconnect();
     };
   }, [url]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      disconnect();
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     isConnected,

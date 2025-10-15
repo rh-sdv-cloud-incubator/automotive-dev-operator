@@ -11,22 +11,22 @@ module.exports = function(app) {
     res.send(`window.__API_BASE = ${JSON.stringify(apiBase)};\n`);
   });
 
-  const sseProxyConfig = {
+  const streamingProxyConfig = {
     target,
     changeOrigin: true,
     secure,
     logLevel: 'debug',
     ws: false,
-    timeout: 0, // No timeout for SSE
-    proxyTimeout: 0, // No proxy timeout for SSE
+    timeout: 0,
+    proxyTimeout: 0,
     onProxyReq: (proxyReq) => {
       const token = process.env.DEV_BEARER_TOKEN || process.env.REACT_APP_DEV_BEARER_TOKEN;
       if (token) proxyReq.setHeader('Authorization', `Bearer ${token}`);
-      console.log('Proxy SSE request to:', proxyReq.path);
+      console.log('Proxy streaming request to:', proxyReq.path);
     },
     onProxyRes: (proxyRes, req, res) => {
-      console.log('Proxy SSE response:', proxyRes.statusCode);
-      // Ensure SSE headers are set
+      console.log('Proxy streaming response:', proxyRes.statusCode);
+      // Ensure streaming headers are set
       proxyRes.headers['Access-Control-Allow-Origin'] = '*';
       proxyRes.headers['Access-Control-Allow-Headers'] = 'Cache-Control';
       proxyRes.headers['Cache-Control'] = 'no-cache';
@@ -34,13 +34,11 @@ module.exports = function(app) {
       proxyRes.headers['Content-Type'] = 'text/event-stream';
     },
     onError: (err, req, res) => {
-      console.error('Proxy SSE error:', err);
+      console.error('Proxy streaming error:', err);
     }
   };
 
-  app.use('/v1/builds/sse', createProxyMiddleware(sseProxyConfig));
-
-  app.use('/v1/builds/:name/logs/sse', createProxyMiddleware(sseProxyConfig));
+  app.use('/v1/builds/:name/logs/sse', createProxyMiddleware(streamingProxyConfig));
 
   app.use(
     '/v1',

@@ -27,12 +27,12 @@ export interface UseLogStreamReturn {
 
 export const useLogStream = (options: UseLogStreamOptions = {}): UseLogStreamReturn => {
   const { onLogUpdate, onError, onStepChange } = options;
-  
+
   // Create stable refs for callbacks to avoid recreating useSSE hook
   const onLogUpdateRef = useRef(onLogUpdate);
   const onErrorRef = useRef(onError);
   const onStepChangeRef = useRef(onStepChange);
-  
+
   // Update refs when callbacks change
   useEffect(() => {
     onLogUpdateRef.current = onLogUpdate;
