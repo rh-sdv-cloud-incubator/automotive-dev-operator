@@ -58,6 +58,7 @@ spec:
         - --skip-auth-regex=^/healthz
         - --email-domain=*
         - --skip-provider-button=true
+        - --upstream-timeout=0
         env:
         - name: COOKIE_SECRET
           valueFrom:

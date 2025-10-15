@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { useSSE, SSEMessage } from './useSSE';
+import { usePolling, PollingMessage } from './usePolling';
 
 export interface BuildItem {
   name: string;
@@ -46,14 +46,14 @@ export const useBuildsList = (options: UseBuildsListOptions = {}): UseBuildsList
   }, [onError, onBuildCreated, onBuildUpdated, onBuildDeleted]);
 
   const [builds, setBuilds] = useState<BuildItem[]>([]);
-  const [sseUrl, setSseUrl] = useState<string | null>(null);
+  const [pollingUrl, setPollingUrl] = useState<string | null>(null);
 
   const buildsRef = useRef<BuildItem[]>([]);
 
-  const handleSSEMessage = useCallback((message: SSEMessage) => {
+  const handleMessage = useCallback((message: PollingMessage) => {
     const { event, data, id } = message;
 
-    console.log('useBuildsList: Received SSE message:', { event, data, id });
+    console.log('useBuildsList: Received message:', { event, data, id });
 
     switch (event) {
       case 'connected':
@@ -138,39 +138,38 @@ export const useBuildsList = (options: UseBuildsListOptions = {}): UseBuildsList
     }
   }, []);
 
-  const handleSSEError = useCallback((error: Event) => {
-    console.error('useBuildsList: SSE error:', error);
+  const handleError = useCallback((error: Error) => {
+    console.error('useBuildsList: Polling error:', error);
     onErrorRef.current?.('Connection error');
   }, []);
 
-  const handleSSEOpen = useCallback(() => {
-    console.log('useBuildsList: SSE connection opened');
+  const handleOpen = useCallback(() => {
+    console.log('useBuildsList: Polling connection opened');
   }, []);
 
-  const handleSSEClose = useCallback(() => {
-    console.log('useBuildsList: SSE connection closed');
+  const handleClose = useCallback(() => {
+    console.log('useBuildsList: Polling connection closed');
   }, []);
 
-  const sseOptions = useMemo(() => {
-    console.log('useBuildsList: Creating new SSE options object');
+  const pollingOptions = useMemo(() => {
+    console.log('useBuildsList: Creating new polling options object');
     return {
-      onMessage: handleSSEMessage,
-      onError: handleSSEError,
-      onOpen: handleSSEOpen,
-      onClose: handleSSEClose,
-      autoReconnect: false,
-      maxReconnectAttempts: 0,
+      onMessage: handleMessage,
+      onError: handleError,
+      onOpen: handleOpen,
+      onClose: handleClose,
+      pollInterval: 2000,
     };
-  }, []);
+  }, [handleMessage, handleError, handleOpen, handleClose]);
 
-  const { isConnected, isConnecting, error } = useSSE(sseUrl, sseOptions);
+  const { isConnected, isConnecting, error } = usePolling(pollingUrl, pollingOptions);
 
   const startStream = useCallback(() => {
-    console.log('useBuildsList: Starting builds stream');
-    const newUrl = '/v1/builds/sse';
-    setSseUrl(currentUrl => {
+    console.log('useBuildsList: Starting builds polling');
+    const newUrl = '/v1/builds';
+    setPollingUrl(currentUrl => {
       if (currentUrl !== newUrl) {
-        console.log('useBuildsList: Setting new SSE URL:', newUrl);
+        console.log('useBuildsList: Setting new polling URL:', newUrl);
         return newUrl;
       } else {
         console.log('useBuildsList: URL unchanged, not reconnecting');
@@ -180,8 +179,8 @@ export const useBuildsList = (options: UseBuildsListOptions = {}): UseBuildsList
   }, []);
 
   const stopStream = useCallback(() => {
-    console.log('useBuildsList: Stopping builds stream');
-    setSseUrl(null);
+    console.log('useBuildsList: Stopping builds polling');
+    setPollingUrl(null);
   }, []);
 
   const refreshBuilds = useCallback(async () => {

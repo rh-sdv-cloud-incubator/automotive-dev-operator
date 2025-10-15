@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,8 +102,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 			c.Data(http.StatusOK, "application/yaml", embeddedOpenAPI)
 		})
 
-		// SSE endpoints without authentication (handled by OAuth proxy)
-		v1.GET("/builds/sse", a.handleStreamBuildsSSE)
+		// Streaming endpoints without authentication (handled by OAuth proxy)
 		v1.GET("/builds/:name/logs/sse", a.handleStreamLogsSSE)
 
 		// Builds endpoints with authentication middleware
@@ -177,11 +175,6 @@ func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
 	a.log.Info("logs SSE requested", "build", name, "reqID", c.GetString("reqID"))
 
 	streamLogsSSE(c, name)
-}
-
-func (a *APIServer) handleStreamBuildsSSE(c *gin.Context) {
-	a.log.Info("builds SSE requested", "reqID", c.GetString("reqID"))
-	a.streamBuildsSSE(c)
 }
 
 func (a *APIServer) handleListArtifacts(c *gin.Context) {
@@ -275,7 +268,7 @@ func streamLogs(c *gin.Context, name string) {
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
 
 	c.Writer.WriteHeader(http.StatusOK)
 	_, _ = c.Writer.Write([]byte("Waiting for logs...\n"))
@@ -615,125 +608,6 @@ func streamLogsSSE(c *gin.Context, name string) {
 
 	sendSSEEvent(c, "completed", "", "Log streaming completed")
 	c.Writer.Flush()
-}
-
-func (a *APIServer) streamBuildsSSE(c *gin.Context) {
-	fmt.Printf("DEBUG: streamBuildsSSE function started\n")
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	fmt.Printf("DEBUG: About to write header\n")
-	c.Writer.WriteHeader(http.StatusOK)
-	fmt.Printf("DEBUG: Header written\n")
-
-	sendSSEEvent(c, "connected", "", "Builds stream connected")
-	c.Writer.Flush()
-
-	namespace := resolveNamespace()
-
-	k8sClient, err := getClientFromRequest(c)
-	if err != nil {
-		sendSSEEvent(c, "error", "", fmt.Sprintf("Client error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-
-	ctx := c.Request.Context()
-
-	// Send initial list of builds
-	var buildList automotivev1.ImageBuildList
-	if err := k8sClient.List(ctx, &buildList, client.InNamespace(namespace)); err != nil {
-		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
-		c.Writer.Flush()
-		return
-	}
-
-	builds := convertImageBuildList(&buildList)
-	buildsData, err := json.Marshal(builds)
-	if err != nil {
-		sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to marshal builds: %v", err))
-		c.Writer.Flush()
-		return
-	}
-
-	sendSSEEvent(c, "initial-list", "", string(buildsData))
-	c.Writer.Flush()
-
-	lastBuilds := make(map[string]BuildListItem)
-	for _, build := range builds {
-		lastBuilds[build.Name] = build
-	}
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	pingTicker := time.NewTicker(15 * time.Second)
-	defer pingTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			sendSSEEvent(c, "disconnected", "", "Connection closed")
-			c.Writer.Flush()
-			return
-
-		case <-pingTicker.C:
-			sendSSEEvent(c, "ping", "", "")
-			c.Writer.Flush()
-
-		case <-ticker.C:
-			// Poll for build changes
-			var currentBuildList automotivev1.ImageBuildList
-			if err := k8sClient.List(ctx, &currentBuildList, client.InNamespace(namespace)); err != nil {
-				sendSSEEvent(c, "error", "", fmt.Sprintf("Failed to list builds: %v", err))
-				c.Writer.Flush()
-				continue
-			}
-
-			currentBuilds := convertImageBuildList(&currentBuildList)
-			currentBuildsMap := make(map[string]BuildListItem)
-			for _, build := range currentBuilds {
-				currentBuildsMap[build.Name] = build
-			}
-
-			// Check for new or updated builds
-			for name, currentBuild := range currentBuildsMap {
-				if lastBuild, exists := lastBuilds[name]; !exists {
-					// New build
-					data, err := json.Marshal(currentBuild)
-					if err == nil {
-						sendSSEEvent(c, "build-created", name, string(data))
-						c.Writer.Flush()
-					}
-				} else if lastBuild != currentBuild {
-					// Updated build
-					data, err := json.Marshal(currentBuild)
-					if err == nil {
-						sendSSEEvent(c, "build-updated", name, string(data))
-						c.Writer.Flush()
-					}
-				}
-			}
-
-			// Check for deleted builds
-			for name := range lastBuilds {
-				if _, exists := currentBuildsMap[name]; !exists {
-					// Deleted build
-					data, err := json.Marshal(lastBuilds[name])
-					if err == nil {
-						sendSSEEvent(c, "build-deleted", name, string(data))
-						c.Writer.Flush()
-					}
-				}
-			}
-
-			// Update last known state
-			lastBuilds = currentBuildsMap
-		}
-	}
 }
 
 // convertImageBuildList converts a Kubernetes ImageBuildList to the API response format

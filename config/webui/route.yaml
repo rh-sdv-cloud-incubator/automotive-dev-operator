@@ -3,6 +3,8 @@ kind: Route
 metadata:
   name: webui
   namespace: automotive-dev-operator-system
+  annotations:
+    haproxy.router.openshift.io/timeout: 24h
   labels:
     app.kubernetes.io/name: webui
     app.kubernetes.io/part-of: automotive-dev-operator

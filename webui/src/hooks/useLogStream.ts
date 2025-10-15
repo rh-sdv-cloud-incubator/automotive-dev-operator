@@ -156,7 +156,7 @@ export const useLogStream = (options: UseLogStreamOptions = {}): UseLogStreamRet
     };
   }, [handleSSEMessage, handleSSEError, handleSSEOpen, handleSSEClose]);
 
-  const { isConnected, isConnecting, error, connect, disconnect } = useSSE(sseUrl, sseOptions);
+  const { isConnected, isConnecting } = useSSE(sseUrl, sseOptions);
 
   const startStream = useCallback((buildName: string) => {
     console.log('useLogStream: startStream called with buildName:', buildName);

@@ -70,7 +70,9 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
     shouldReconnectRef.current = true;
 
     try {
-      const finalUrl = url.startsWith('/v1') ? url : (url.startsWith('http') ? url : `/${url}`);
+      const finalUrl = url.startsWith('http')
+      ? url
+      : `${window.location.origin}${url.startsWith('/') ? url : `/${url}`}`;
       console.log('[useSSE] Connecting to EventSource:', finalUrl);
 
       const eventSource = new EventSource(finalUrl, { withCredentials: true });
@@ -134,8 +136,8 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
         return originalAddEventListener(type, listener, options);
       };
 
-      // Manually handle known event types from your server
-      const knownEvents = ['connected', 'initial-list', 'ping', 'build-created', 'build-updated', 'build-deleted', 'error', 'disconnected'];
+      // Manually handle known event types for logs
+      const knownEvents = ['connected', 'log', 'step', 'waiting', 'ping', 'completed', 'error', 'disconnected'];
       knownEvents.forEach(eventType => {
         eventSource.addEventListener(eventType, (event: MessageEvent) => {
           const message: SSEMessage = {
@@ -196,3 +198,4 @@ export const useSSE = (url: string | null, options: SSEHookOptions = {}): SSEHoo
     lastMessage,
   };
 };
+
