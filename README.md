@@ -1,3 +1,5 @@
+Archived in favor of https://github.com/rh-automotive-dev-platform/automotive-dev-operator
+
 # automotive-dev-operator
 
 A simple controller that watches two CRs: `AutomotiveDev` which applies a pipeline and a few tasks. And `ImageBuild` which triggers an automotive OS image build, powered by automotive-image-builder.
